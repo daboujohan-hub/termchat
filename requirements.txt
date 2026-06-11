@@ -1,0 +1,2 @@
+# TermChat v4.0 — Dépendances
+# Pas de dépendances externes, tout est en stdlib Python 3
