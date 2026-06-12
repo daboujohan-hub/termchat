@@ -650,8 +650,8 @@ def main():
     banniere()
 
     # Adresse du serveur
-    host = sys.argv[1] if len(sys.argv) >= 2 else "127.0.0.1"
-    port = int(sys.argv[2]) if len(sys.argv) >= 3 else 9999
+    host = sys.argv[1] if len(sys.argv) >= 2 else "junction.proxy.rlwy.net"
+    port = int(sys.argv[2]) if len(sys.argv) >= 3 else 35030
 
     print(f"{G}🔌 Connexion au serveur {host}:{port}...{Z}")
     try:
