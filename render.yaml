@@ -7,3 +7,5 @@ services:
     envVars:
       - key: PORT
         value: 9999
+      - key: API_PORT
+        value: 8080
