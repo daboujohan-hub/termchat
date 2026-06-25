@@ -774,8 +774,8 @@ def quitter(sig=None,frame=None):
 def main():
     global sock_cli,en_cours
     banniere()
-    host=sys.argv[1] if len(sys.argv)>=2 else "junction.proxy.rlwy.net"
-    port=int(sys.argv[2]) if len(sys.argv)>=3 else 35030
+    host=sys.argv[1] if len(sys.argv)>=2 else "termchat-server-thermometre.up.railway.app"
+port=int(sys.argv[2]) if len(sys.argv)>=3 else 9999
     print(f"{G}🔌 Connexion a {host}:{port}...{Z}")
     try:
         sock_cli=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
