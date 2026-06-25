@@ -1,0 +1,1177 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>LABO IA & TERMUX ACADEMY v7</title>
+<style>
+:root{
+  --or:#FF6B00;--or2:#FF9500;--gd:#FFD700;--cy:#00D4FF;--gr:#00FF88;--rs:#FF2060;--pu:#9B59FF;
+  --bg:#030810;--sf:#0F1829;--br:rgba(255,107,0,.18);
+  --tx:#F0E8D8;--mt:rgba(240,232,216,.45);
+  --mn:'JetBrains Mono','Courier New',monospace;--ob:'Orbitron','Arial Black',sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--tx);min-height:100vh;overflow-x:hidden;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}
+input,textarea{-webkit-user-select:text;user-select:text}
+body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(255,107,0,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,107,0,.025) 1px,transparent 1px);background-size:38px 38px;pointer-events:none;z-index:0}
+
+#splash{position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;overflow-y:auto}
+.sp-tri{width:0;height:0;border-left:30px solid transparent;border-right:30px solid transparent;border-bottom:52px solid var(--or);margin-bottom:14px;filter:drop-shadow(0 0 18px rgba(255,107,0,.7));animation:pt 2s ease-in-out infinite}
+@keyframes pt{0%,100%{filter:drop-shadow(0 0 18px rgba(255,107,0,.6))}50%{filter:drop-shadow(0 0 38px rgba(255,107,0,1))}}
+.sp-h1{font-family:var(--ob);font-size:clamp(1.3rem,5vw,2.1rem);font-weight:900;line-height:1.15;margin-bottom:10px}
+.sp-h1 .la{color:var(--or)}.sp-h1 .ta{color:var(--gd)}
+.sp-p{color:var(--mt);font-size:.82rem;max-width:420px;line-height:1.75;margin:0 auto 24px}
+.sp-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-width:420px;margin:0 auto 24px}
+.sp-item{background:rgba(255,107,0,.06);border:1px solid rgba(255,107,0,.15);border-radius:8px;padding:10px 6px;text-align:center}
+.sp-item .ico{font-size:1.3rem;display:block;margin-bottom:5px}
+.sp-item strong{font-size:.68rem;font-weight:700;color:var(--or);display:block}
+.sp-item span{font-size:.58rem;color:var(--mt)}
+.sp-btn{background:linear-gradient(135deg,var(--or),var(--gd));color:#000;font-family:var(--ob);font-weight:700;font-size:.88rem;padding:14px 40px;border-radius:8px;border:none;cursor:pointer;box-shadow:0 0 36px rgba(255,107,0,.4);letter-spacing:.5px}
+.sp-btn:active{transform:scale(.97)}
+.sp-ver{font-family:var(--mn);font-size:.58rem;color:var(--mt);margin-top:14px}
+.sp-new{background:rgba(0,255,136,.08);border:1px solid rgba(0,255,136,.2);border-radius:5px;padding:6px 12px;font-family:var(--mn);font-size:.6rem;color:var(--gr);margin-top:10px;display:inline-block}
+
+.topbar{background:rgba(10,15,30,.97);border-bottom:1px solid var(--br);padding:12px 14px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50}
+.tl-wrap{display:flex;align-items:center;gap:8px}
+.tl-tri{width:0;height:0;border-left:8px solid transparent;border-right:8px solid transparent;border-bottom:13px solid var(--or);flex-shrink:0}
+.tl-txt{font-family:var(--ob);font-size:.65rem;font-weight:700;line-height:1.2}
+.tl-txt .la{color:var(--or)}.tl-txt .ta{color:var(--gd);font-size:.55rem}
+.xp-wrap{display:flex;align-items:center;gap:6px}
+.xp-lv{background:rgba(255,107,0,.1);border:1px solid rgba(255,107,0,.25);color:var(--or);font-family:var(--mn);font-size:.56rem;font-weight:700;padding:3px 8px;border-radius:3px}
+.xp-bar{width:55px;height:4px;background:rgba(255,255,255,.07);border-radius:2px;overflow:hidden}
+.xp-f{height:100%;background:linear-gradient(90deg,var(--or),var(--gd));border-radius:2px;transition:width .5s}
+.xp-n{font-family:var(--mn);font-size:.58rem;color:var(--gd);font-weight:700}
+
+.tabs{display:flex;gap:3px;padding:8px 10px;background:rgba(10,15,30,.97);border-bottom:1px solid var(--br);overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{padding:7px 12px;border-radius:5px;font-size:.62rem;font-weight:700;border:1px solid var(--br);color:var(--mt);background:transparent;white-space:nowrap;font-family:var(--mn);flex-shrink:0}
+.tab.on{background:var(--or);color:#000;border-color:var(--or)}
+
+.page{display:none;padding:14px 12px 28px;max-width:820px;margin:0 auto;position:relative;z-index:1;animation:fin .28s ease}
+.page.on{display:block}
+@keyframes fin{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
+.pg-t{font-family:var(--ob);font-size:.85rem;font-weight:700;color:var(--or);margin-bottom:2px}
+.pg-s{font-size:.7rem;color:var(--mt);margin-bottom:14px}
+
+.box{background:var(--sf);border:1px solid var(--br);border-radius:8px;padding:14px;margin-bottom:11px}
+.box-t{font-family:var(--mn);font-size:.72rem;font-weight:700;color:var(--or);margin-bottom:11px;display:flex;align-items:center;gap:6px}
+
+.fg{margin-bottom:10px}
+.fg label{display:block;font-size:.6rem;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--mt);margin-bottom:5px}
+.fg input,.fg select,.fg textarea{width:100%;background:rgba(255,107,0,.04);border:1.5px solid rgba(255,107,0,.14);border-radius:6px;padding:10px 11px;color:var(--tx);font-size:.85rem;outline:none;-webkit-appearance:none;resize:vertical}
+.fg input:focus,.fg select:focus,.fg textarea:focus{border-color:var(--or)}
+.fg select option{background:#0A0F1E;color:var(--tx)}
+.fr{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+@media(max-width:440px){.fr{grid-template-columns:1fr}}
+
+.btn{padding:9px 16px;border-radius:6px;font-family:var(--mn);font-size:.68rem;font-weight:700;cursor:pointer;border:none;display:inline-flex;align-items:center;gap:5px;letter-spacing:.3px}
+.btn:active{transform:scale(.96)}
+.btn-o{background:var(--or);color:#000}
+.btn-gd{background:var(--gd);color:#000}
+.btn-cy{background:var(--cy);color:#000}
+.btn-gr{background:var(--gr);color:#000}
+.btn-gh{background:rgba(255,255,255,.06);color:var(--tx);border:1px solid var(--br)}
+.btn-rs{background:var(--rs);color:#fff}
+.btn-pu{background:var(--pu);color:#fff}
+.btn-sm{padding:6px 12px;font-size:.6rem;border-radius:5px}
+.btn-fw{width:100%;justify-content:center}
+
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(90px);background:var(--or);color:#000;padding:10px 20px;border-radius:6px;font-family:var(--mn);font-size:.7rem;font-weight:800;z-index:9999;transition:transform .3s;white-space:nowrap;box-shadow:0 0 28px rgba(255,107,0,.5)}
+#toast.show{transform:translateX(-50%) translateY(0)}
+
+.sg{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px;margin-bottom:12px}
+.sc{background:var(--sf);border:1px solid var(--br);border-radius:7px;padding:11px 9px;text-align:center}
+.sc .si{font-size:1.2rem;display:block;margin-bottom:4px}
+.sc strong{display:block;font-family:var(--mn);font-size:1.25rem;font-weight:800;line-height:1;color:var(--or)}
+.sc small{font-size:.57rem;color:var(--mt);display:block;margin-top:2px}
+
+.dev-card{background:linear-gradient(145deg,#120500,#200a00,#120500);border:2px solid var(--or);border-radius:16px;padding:20px;position:relative;overflow:hidden;max-width:380px;margin:0 auto;box-shadow:0 0 60px rgba(255,107,0,.4),inset 0 0 60px rgba(255,107,0,.05)}
+.dc-hdr{display:flex;align-items:center;gap:9px;margin-bottom:14px;position:relative;z-index:1}
+.dc-tri{width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;border-bottom:18px solid var(--or);flex-shrink:0}
+.dc-brand{font-family:var(--ob);line-height:1.2}
+.dc-b1{font-size:.75rem;font-weight:700;color:var(--or)}
+.dc-b2{font-size:.58rem;color:var(--gd);display:block}
+.dc-idtag{margin-left:auto;font-family:var(--mn);font-size:.55rem;color:rgba(255,107,0,.5)}
+.dc-body{display:flex;gap:12px;margin-bottom:14px;position:relative;z-index:1}
+.dc-photo{width:84px;height:96px;border-radius:7px;border:2px solid var(--or);background:#0A0F1E;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;position:relative}
+.dc-photo img{width:100%;height:100%;object-fit:cover;display:none}
+.dc-ph-ico{font-size:2.3rem;opacity:.4}
+.dc-info{flex:1;min-width:0}
+.dc-name{font-size:1rem;font-weight:800;line-height:1.2;margin-bottom:2px;color:#fff;word-break:break-word}
+.dc-role{font-size:.68rem;color:var(--or);margin-bottom:7px}
+.dc-stitle{font-size:.57rem;font-weight:700;color:var(--tx);margin-bottom:4px;text-transform:uppercase}
+.dc-specs{list-style:none;display:flex;flex-direction:column;gap:2px}
+.dc-specs li{font-size:.62rem;color:rgba(240,232,216,.75)}
+.dc-specs li::before{content:'▸ ';color:var(--or)}
+.dc-div{height:1px;background:linear-gradient(90deg,transparent,rgba(255,107,0,.28),transparent);margin:12px 0}
+.dc-ml{font-size:.55rem;color:var(--mt);margin-bottom:2px}
+.dc-mat{font-family:var(--ob);font-size:.9rem;font-weight:700;color:var(--rs);letter-spacing:.8px;margin-bottom:6px}
+.dc-lv{font-size:.65rem;color:var(--tx);margin-bottom:2px}
+.dc-co{font-size:.62rem;color:var(--mt)}
+.dc-bot{display:flex;align-items:flex-end;justify-content:space-between;margin-top:10px;gap:9px}
+.dc-ch{display:flex;align-items:center;gap:5px;font-size:.62rem;color:var(--tx);margin-bottom:5px}
+.dc-ch::before{content:'◎';color:var(--or)}
+.dc-mem{display:flex;align-items:center;gap:4px;font-size:.57rem;color:var(--mt)}
+.dc-dot{width:6px;height:6px;border-radius:50%;background:var(--rs)}
+.dc-idn{font-family:var(--mn);font-size:.5rem;color:rgba(255,107,0,.38);margin-top:3px}
+.dc-qr{width:64px;height:64px;background:#fff;border-radius:5px;padding:3px}
+.dc-qrl{font-size:.47rem;color:var(--mt);text-align:center;margin-top:2px}
+
+.ci{background:rgba(26,10,0,.5);border:1px solid rgba(255,107,0,.22);border-radius:7px;padding:11px;margin-bottom:10px}
+.ci-h{display:flex;align-items:center;gap:9px}
+.ci-ph{width:38px;height:42px;border-radius:5px;border:1.5px solid var(--or);background:#0A0F1E;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;font-size:1.1rem}
+.ci-ph img{width:100%;height:100%;object-fit:cover}
+.ci-inf{flex:1;min-width:0}
+.ci-nm{font-weight:700;font-size:.83rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ci-rl{font-size:.62rem;color:var(--or)}
+.ci-id{font-family:var(--mn);font-size:.52rem;color:var(--mt)}
+.ci-ac{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}
+
+.lg{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:8px}
+.lc{background:var(--sf);border:1px solid var(--br);border-radius:7px;padding:12px 10px;position:relative}
+.lc.done{border-color:var(--gr)}
+.lc.locked{opacity:.32}
+.lc::after{content:'';position:absolute;top:6px;right:8px;font-size:.68rem}
+.lc.done::after{content:'✅'}
+.lc.locked::after{content:'🔒'}
+.lc-i{font-size:1.4rem;display:block;margin-bottom:6px}
+.lc-n{font-family:var(--mn);font-size:.52rem;color:var(--mt)}
+.lc-t{font-size:.7rem;font-weight:700;margin:2px 0;line-height:1.3}
+.lc-l{font-size:.57rem;color:var(--or);font-family:var(--mn)}
+.lc-p{font-size:.58rem;color:var(--gd);margin-top:5px;font-family:var(--mn)}
+
+.ld{display:none;background:var(--sf);border:2px solid var(--or);border-radius:8px;padding:16px;margin-bottom:11px}
+.ld.show{display:block}
+.ld-hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:13px;flex-wrap:wrap}
+.ld-title{font-family:var(--mn);font-size:.88rem;font-weight:700;color:var(--gr)}
+.ld-body{font-size:.8rem;line-height:1.85;color:rgba(240,232,216,.88);margin-bottom:13px}
+.ld-body h4{color:var(--or);font-family:var(--mn);font-size:.72rem;margin:10px 0 5px}
+.cb{background:#020810;border:1px solid rgba(0,212,255,.14);border-radius:5px;padding:10px 12px;font-family:var(--mn);font-size:.7rem;color:var(--gr);margin:7px 0;line-height:1.8;overflow-x:auto;white-space:pre}
+.nt{background:rgba(0,255,136,.05);border-left:3px solid var(--gr);padding:8px 12px;border-radius:0 5px 5px 0;margin:8px 0;font-size:.74rem;line-height:1.6}
+.wn{background:rgba(255,215,0,.05);border-left:3px solid var(--gd);padding:8px 12px;border-radius:0 5px 5px 0;margin:8px 0;font-size:.74rem;line-height:1.6}
+.def{background:rgba(155,89,255,.06);border-left:3px solid var(--pu);padding:8px 12px;border-radius:0 5px 5px 0;margin:7px 0;font-size:.73rem;line-height:1.6}
+
+.qb{background:var(--sf);border:1px solid var(--br);border-radius:7px;padding:13px;margin-bottom:11px}
+.qt{font-family:var(--mn);font-size:.8rem;font-weight:700;color:var(--cy);margin-bottom:12px;line-height:1.5}
+.qo-list{display:flex;flex-direction:column;gap:6px}
+.qo{background:rgba(255,255,255,.03);border:1px solid var(--br);border-radius:5px;padding:10px 12px;font-size:.77rem;text-align:left;color:var(--tx);width:100%}
+.qo.ok{border-color:var(--gr);background:rgba(0,255,136,.07);color:var(--gr)}
+.qo.nok{border-color:var(--rs);background:rgba(255,32,96,.05);color:var(--rs)}
+.qfb{padding:9px 12px;border-radius:5px;font-size:.72rem;font-weight:600;margin-top:8px;display:none;line-height:1.6}
+.qfb.show{display:block}
+.qfb.ok{background:rgba(0,255,136,.07);border:1px solid rgba(0,255,136,.2);color:var(--gr)}
+.qfb.nok{background:rgba(255,32,96,.05);border:1px solid rgba(255,32,96,.2);color:#FF6090}
+
+.ed-wrap{background:#020810;border:1px solid rgba(0,212,255,.14);border-radius:7px;margin-bottom:11px;overflow:hidden}
+.ed-top{display:flex;justify-content:space-between;align-items:center;background:rgba(0,212,255,.04);padding:8px 12px;border-bottom:1px solid rgba(0,212,255,.1)}
+.ed-inf{font-family:var(--mn);font-size:.65rem;color:var(--mt)}
+.lt{color:var(--cy)}
+.ed-ac{display:flex;gap:6px}
+.clb{background:rgba(255,32,96,.1);border:1px solid rgba(255,32,96,.2);color:var(--rs);border-radius:4px;padding:5px 10px;font-size:.62rem;font-family:var(--mn)}
+.rb{background:var(--gr);color:#000;border:none;border-radius:4px;padding:6px 14px;font-size:.65rem;font-weight:800;font-family:var(--mn)}
+.cta{width:100%;min-height:140px;background:transparent;border:none;padding:12px;font-family:var(--mn);font-size:.78rem;color:var(--gr);resize:vertical;outline:none;line-height:1.75}
+.ob{border-top:1px solid rgba(0,212,255,.1);padding:10px 12px}
+.obl{font-family:var(--mn);font-size:.55rem;color:var(--cy);margin-bottom:5px}
+
+.tw{background:#010509;border:1px solid rgba(0,255,136,.14);border-radius:7px;overflow:hidden}
+.tb{background:#1a1f2e;display:flex;align-items:center;gap:8px;padding:8px 12px}
+.tds{display:flex;gap:5px}
+.td{width:10px;height:10px;border-radius:50%}
+.tt{font-family:var(--mn);font-size:.58rem;color:var(--mt);flex:1;text-align:center}
+.ts{min-height:130px;max-height:230px;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:4px}
+.tl-row{font-family:var(--mn);font-size:.74rem;line-height:1.6}
+.tp{color:var(--gr);font-weight:700}
+.tp2{color:var(--gr);font-weight:700;font-size:.74rem;white-space:nowrap}
+.tc{color:var(--cy)}
+.to{color:var(--tx)}
+.te{color:var(--rs)}
+.tir{display:flex;align-items:center;gap:6px;padding:9px 12px;border-top:1px solid rgba(0,255,136,.1)}
+.ti{flex:1;background:transparent;border:none;color:var(--cy);font-family:var(--mn);font-size:.75rem;outline:none}
+.tgo{background:var(--gr);color:#000;border:none;border-radius:3px;padding:5px 12px;font-family:var(--mn);font-size:.65rem;font-weight:700}
+
+.glo-search{width:100%;background:rgba(255,107,0,.04);border:1.5px solid rgba(255,107,0,.14);border-radius:6px;padding:10px 12px;color:var(--tx);font-size:.85rem;outline:none;margin-bottom:10px}
+.glo-filter{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}
+
+.chatbox{background:#020810;border:1px solid rgba(0,212,255,.12);border-radius:7px;min-height:180px;max-height:350px;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:9px;margin-bottom:9px}
+.msg{font-size:.78rem;line-height:1.75;max-width:88%}
+.msg.user{margin-left:auto;background:rgba(255,107,0,.08);border:1px solid rgba(255,107,0,.2);border-radius:8px 8px 2px 8px;padding:9px 12px;font-family:var(--mn);color:var(--or)}
+.msg.ai{background:rgba(0,212,255,.04);border:1px solid rgba(0,212,255,.12);border-radius:8px 8px 8px 2px;padding:9px 12px;color:rgba(240,232,216,.88)}
+.an{font-family:var(--mn);font-size:.56rem;color:var(--cy);margin-bottom:5px;display:flex;align-items:center;gap:6px}
+.qq{background:rgba(0,212,255,.05);border:1px solid rgba(0,212,255,.15);color:var(--cy);border-radius:5px;padding:6px 11px;font-size:.62rem;font-family:var(--mn)}
+.sp-tog{background:rgba(255,107,0,.08);border:1px solid rgba(255,107,0,.2);color:var(--or);border-radius:5px;padding:7px 13px;font-size:.65rem;font-family:var(--mn)}
+.sp-tog.on{background:rgba(0,255,136,.08);border-color:rgba(0,255,136,.25);color:var(--gr)}
+.micBtn-style{background:rgba(255,32,96,.08);border:1px solid rgba(255,32,96,.2);color:var(--rs);border-radius:5px;padding:7px 13px;font-size:.65rem;font-family:var(--mn)}
+.micBtn-style.listening{background:rgba(255,32,96,.18);border-color:var(--rs)}
+
+.game-info{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;font-family:var(--mn)}
+.game-score{font-size:1.4rem;font-weight:900;color:var(--or);font-family:var(--ob)}
+.game-hiscore{font-size:1.4rem;font-weight:900;color:var(--gd);font-family:var(--ob)}
+#snakeCanvas{display:block;margin:0 auto;border:1px solid rgba(0,212,255,.15);border-radius:5px;touch-action:none}
+.dpad{display:grid;grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr 1fr;gap:4px;max-width:170px;margin:10px auto 0}
+.dp{background:rgba(255,255,255,.05);border:1px solid var(--br);border-radius:6px;padding:12px;text-align:center;font-size:1rem;font-family:var(--mn);color:var(--tx)}
+.dp:active{background:rgba(255,107,0,.15)}
+.dp-up{grid-column:2;grid-row:1}
+.dp-left{grid-column:1;grid-row:2}
+.dp-mid{grid-column:2;grid-row:2;font-family:var(--mn);font-size:.65rem;color:var(--mt)}
+.dp-right{grid-column:3;grid-row:2}
+
+.note-in,.note-ta{width:100%;background:rgba(255,107,0,.04);border:1.5px solid rgba(255,107,0,.14);border-radius:6px;padding:10px 11px;color:var(--tx);font-size:.85rem;outline:none;display:block;margin-bottom:7px}
+.note-ta{min-height:100px;resize:vertical}
+.note-item{background:var(--sf);border:1px solid var(--br);border-radius:7px;padding:12px;margin-bottom:8px}
+.note-title{font-size:.8rem;font-weight:700;margin-bottom:4px}
+.note-prev{font-size:.7rem;color:var(--mt);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;font-family:var(--mn)}
+.note-date{font-size:.57rem;color:rgba(255,107,0,.4);font-family:var(--mn);margin-top:6px}
+
+.ex-item{background:var(--sf);border:1px solid var(--br);border-radius:8px;padding:13px;margin-bottom:9px}
+.ex-item.done{border-left:3px solid var(--gr)}
+.ex-hdr{display:flex;align-items:center;gap:6px;margin-bottom:5px;flex-wrap:wrap}
+.ex-cat-tag{background:rgba(255,107,0,.1);color:var(--or);font-family:var(--mn);font-size:.55rem;font-weight:700;padding:2px 8px;border-radius:3px}
+.ex-title{font-size:.8rem;font-weight:700}
+.ex-body{font-size:.76rem;line-height:1.78;color:rgba(240,232,216,.82);margin:6px 0}
+
+.badge-overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:8888;display:none;align-items:center;justify-content:center;padding:20px}
+.badge-overlay.show{display:flex}
+.badge-box{background:linear-gradient(145deg,#1a0800,#2d1400);border:2px solid var(--gd);border-radius:16px;padding:28px;text-align:center;max-width:320px;box-shadow:0 0 60px rgba(255,215,0,.3)}
+.badge-ico{font-size:3.5rem;display:block;margin-bottom:10px}
+.badge-title{font-family:var(--ob);font-size:1.2rem;font-weight:900;color:var(--gd);margin-bottom:6px}
+.badge-desc{font-size:.78rem;color:var(--mt);line-height:1.6;margin-bottom:16px}
+
+#androidBadge{position:fixed;top:10px;right:10px;background:rgba(0,255,136,.12);border:1px solid rgba(0,255,136,.3);color:var(--gr);font-family:var(--mn);font-size:.52rem;padding:4px 9px;border-radius:4px;z-index:60;display:none}
+
+/* ══ AUTH SCREEN ══ */
+#authScreen{position:fixed;inset:0;background:var(--bg);z-index:9998;display:none;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;overflow-y:auto}
+#authScreen.show{display:flex}
+.auth-tri{width:0;height:0;border-left:24px solid transparent;border-right:24px solid transparent;border-bottom:42px solid var(--or);margin-bottom:14px;filter:drop-shadow(0 0 14px rgba(255,107,0,.6))}
+.auth-title{font-family:var(--ob);font-size:1.3rem;font-weight:900;margin-bottom:4px}
+.auth-title .la{color:var(--or)}
+.auth-sub{color:var(--mt);font-size:.74rem;margin-bottom:22px}
+.auth-box{background:var(--sf);border:1px solid var(--br);border-radius:10px;padding:20px;width:100%;max-width:360px;text-align:left}
+.auth-tabs{display:flex;gap:6px;margin-bottom:16px;background:rgba(255,107,0,.05);border-radius:7px;padding:4px}
+.auth-tab{flex:1;text-align:center;padding:8px;border-radius:5px;font-family:var(--mn);font-size:.68rem;font-weight:700;color:var(--mt);cursor:pointer;border:none;background:transparent}
+.auth-tab.on{background:var(--or);color:#000}
+.auth-fg{margin-bottom:11px}
+.auth-fg label{display:block;font-size:.6rem;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--mt);margin-bottom:5px}
+.auth-fg input{width:100%;background:rgba(255,107,0,.04);border:1.5px solid rgba(255,107,0,.16);border-radius:6px;padding:11px 12px;color:var(--tx);font-size:.85rem;outline:none}
+.auth-fg input:focus{border-color:var(--or)}
+.auth-err{background:rgba(255,32,96,.08);border:1px solid rgba(255,32,96,.25);color:#FF6090;font-size:.7rem;border-radius:6px;padding:9px 11px;margin-bottom:12px;display:none;line-height:1.6}
+.auth-err.show{display:block}
+.auth-ok{background:rgba(0,255,136,.08);border:1px solid rgba(0,255,136,.25);color:var(--gr);font-size:.7rem;border-radius:6px;padding:9px 11px;margin-bottom:12px;display:none;line-height:1.6}
+.auth-ok.show{display:block}
+.auth-submit{width:100%;background:linear-gradient(135deg,var(--or),var(--gd));color:#000;font-family:var(--ob);font-weight:700;font-size:.82rem;padding:13px;border-radius:7px;border:none;cursor:pointer;margin-top:4px}
+.auth-submit:disabled{opacity:.5}
+.auth-skip{margin-top:16px;font-family:var(--mn);font-size:.66rem;color:var(--mt);background:transparent;border:none;text-decoration:underline;cursor:pointer}
+.auth-spin{display:inline-block;width:13px;height:13px;border:2px solid rgba(0,0,0,.3);border-top-color:#000;border-radius:50%;animation:authspin .6s linear infinite;vertical-align:middle;margin-right:6px}
+@keyframes authspin{to{transform:rotate(360deg)}}
+
+/* ══ SYNC STATUS ══ */
+#syncStatus{position:fixed;top:10px;left:10px;background:rgba(0,212,255,.1);border:1px solid rgba(0,212,255,.25);color:var(--cy);font-family:var(--mn);font-size:.5rem;padding:4px 8px;border-radius:4px;z-index:59;display:none}
+#syncStatus.show{display:block}
+#syncStatus.offline{background:rgba(255,215,0,.1);border-color:rgba(255,215,0,.25);color:var(--gd)}
+#syncStatus.error{background:rgba(255,32,96,.1);border-color:rgba(255,32,96,.25);color:var(--rs)}
+
+.account-row{display:flex;align-items:center;gap:8px;background:var(--sf);border:1px solid var(--br);border-radius:7px;padding:11px;margin-bottom:11px}
+.account-ava{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--or),var(--gd));display:flex;align-items:center;justify-content:center;font-weight:800;color:#000;font-size:.9rem;flex-shrink:0}
+.account-inf{flex:1;min-width:0}
+.account-nm{font-weight:700;font-size:.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.account-em{font-size:.62rem;color:var(--mt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+</style>
+</head>
+<body>
+
+<div id="splash">
+  <div class="sp-tri"></div>
+  <div class="sp-h1"><span class="la">LABO IA</span> &amp;<br><span class="ta">TERMUX ACADEMY</span></div>
+  <p class="sp-p">La plateforme des développeurs africains. Carte officielle, classes CP1→CM3, exercices, Snake, Prof IA, Termux &amp; INFINI.</p>
+  <div class="sp-grid">
+    <div class="sp-item"><span class="ico">🃏</span><strong>Carte Dev</strong><span>Identité officielle</span></div>
+    <div class="sp-item"><span class="ico">📚</span><strong>CP1→CM3</strong><span>Leçons</span></div>
+    <div class="sp-item"><span class="ico">💻</span><strong>Éditeur</strong><span>Code live</span></div>
+    <div class="sp-item"><span class="ico">🎮</span><strong>Snake</strong><span>Dev Edition</span></div>
+    <div class="sp-item"><span class="ico">🏋️</span><strong>Exercices</strong><span>Pratique</span></div>
+    <div class="sp-item"><span class="ico">🤖</span><strong>Prof IA</strong><span>Hors-ligne</span></div>
+  </div>
+  <button class="sp-btn" onclick="launch()">▶ ENTRER À L'ACADÉMIE</button>
+  <div class="sp-new">✨ v7.0 · App Android native · 100% hors-ligne</div>
+  <div class="sp-ver">// LABO IA &amp; TERMUX ACADEMY · v7.0 · Côte d'Ivoire 🇨🇮</div>
+</div>
+
+<div id="androidBadge">📱 APP ANDROID</div>
+<div id="syncStatus"></div>
+
+<div id="authScreen">
+  <div class="auth-tri"></div>
+  <div class="auth-title"><span class="la">LABO IA</span> &amp; TERMUX</div>
+  <p class="auth-sub">Connectez-vous pour synchroniser votre progression sur tous vos appareils.</p>
+  <div class="auth-box">
+    <div class="auth-tabs">
+      <button class="auth-tab on" id="tabLogin" onclick="setAuthMode('login')">Connexion</button>
+      <button class="auth-tab" id="tabRegister" onclick="setAuthMode('register')">Inscription</button>
+    </div>
+    <div class="auth-err" id="authErr"></div>
+    <div class="auth-ok" id="authOk"></div>
+
+    <div id="registerFields" style="display:none">
+      <div class="auth-fg"><label>Prénom</label><input type="text" id="authPrenom" placeholder="Abou"></div>
+      <div class="auth-fg"><label>Nom</label><input type="text" id="authNom" placeholder="Diomandé"></div>
+    </div>
+    <div class="auth-fg"><label>Email</label><input type="email" id="authEmail" placeholder="vous@exemple.com" autocomplete="email"></div>
+    <div class="auth-fg"><label>Mot de passe</label><input type="password" id="authPassword" placeholder="6 caractères minimum" autocomplete="current-password"></div>
+
+    <button class="auth-submit" id="authSubmitBtn" onclick="submitAuth()">Se connecter</button>
+    <button class="auth-skip" onclick="skipAuth()">Continuer sans compte (mode local)</button>
+  </div>
+</div>
+
+<div id="app" style="display:none">
+
+<div class="topbar">
+  <div class="tl-wrap">
+    <div class="tl-tri"></div>
+    <div class="tl-txt"><span class="la">LABO IA</span> &amp;<br><span class="ta">TERMUX ACADEMY</span></div>
+  </div>
+  <div class="xp-wrap">
+    <div class="xp-lv" id="xpLv">DEV_00</div>
+    <div class="xp-bar"><div class="xp-f" id="xpF" style="width:0%"></div></div>
+    <div class="xp-n" id="xpN">0 XP</div>
+  </div>
+</div>
+
+<div class="tabs">
+  <button class="tab on"  onclick="go('home',this)">🏠 Accueil</button>
+  <button class="tab"     onclick="go('card',this)">🃏 Ma Carte</button>
+  <button class="tab"     onclick="go('cards',this)">📋 Mes Cartes</button>
+  <button class="tab"     onclick="go('classes',this)">📚 Classes</button>
+  <button class="tab"     onclick="go('editor',this)">💻 Code</button>
+  <button class="tab"     onclick="go('termux',this)">📱 Termux</button>
+  <button class="tab"     onclick="go('infini',this)">🌍 INFINI</button>
+  <button class="tab"     onclick="go('quiz',this)">🧠 Quiz</button>
+  <button class="tab"     onclick="go('ai',this)">🤖 Prof IA</button>
+  <button class="tab"     onclick="go('stats',this)">📊 Stats</button>
+  <button class="tab"     onclick="go('snake',this)">🎮 Snake</button>
+  <button class="tab"     onclick="go('exercices',this)">🏋️ Exercices</button>
+  <button class="tab"     onclick="go('notes',this)">🗒️ Notes</button>
+  <button class="tab"     onclick="go('glossaire',this)">📖 Glossaire</button>
+</div>
+
+<div class="page on" id="page-home">
+  <p class="pg-t">// TABLEAU DE BORD</p>
+  <p class="pg-s" id="hDate"></p>
+  <div id="hWelcome" style="background:linear-gradient(135deg,rgba(255,107,0,.07),rgba(255,215,0,.05));border:1px solid rgba(255,107,0,.18);border-radius:8px;padding:10px 13px;margin-bottom:12px;font-family:var(--mn);font-size:.68rem;line-height:1.75;color:rgba(240,232,216,.75)"></div>
+  <div class="sg" id="hStats"></div>
+  <div class="box"><div class="box-t">🎯 Prochaine étape</div><div id="hNext" style="font-size:.78rem;line-height:1.7"></div></div>
+  <div class="box" style="border-color:rgba(255,107,0,.25)"><div class="box-t" style="color:var(--gd)">💡 Conseil du jour</div><div id="hTip" style="font-family:var(--mn);font-size:.72rem;color:rgba(240,232,216,.65);line-height:1.8"></div></div>
+  <div class="box" style="border-color:rgba(0,212,255,.2)"><div class="box-t" style="color:var(--cy)">🏅 Mes Badges</div><div id="hBadges" style="display:flex;flex-wrap:wrap;gap:6px"></div></div>
+  <div class="box" style="border-color:rgba(0,255,136,.2)">
+    <div class="box-t" style="color:var(--gr)">⚡ Accès rapide</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px">
+      <button class="btn btn-gh btn-sm" onclick="go('classes',document.querySelectorAll('.tab')[3])">📚 Classes</button>
+      <button class="btn btn-gh btn-sm" onclick="go('ai',document.querySelectorAll('.tab')[8])">🤖 Prof IA</button>
+      <button class="btn btn-gh btn-sm" onclick="go('snake',document.querySelectorAll('.tab')[10])">🎮 Snake</button>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="page-card">
+  <p class="pg-t">// CRÉER MA CARTE DÉVELOPPEUR</p>
+  <p class="pg-s">Remplissez le formulaire — la carte se génère en temps réel !</p>
+  <div id="cardPreview" style="margin-bottom:14px">
+    <div class="dev-card" id="devCard">
+      <div class="dc-hdr">
+        <div class="dc-tri"></div>
+        <div class="dc-brand"><span class="dc-b1">LABO IA &amp;</span><span class="dc-b2">TERMUX ACADEMY</span></div>
+        <div class="dc-idtag" id="dcId">#DEV-2026-001</div>
+      </div>
+      <div class="dc-body">
+        <div class="dc-photo"><span class="dc-ph-ico" id="dcPhIco">👤</span><img id="dcPhImg" alt=""></div>
+        <div class="dc-info">
+          <div class="dc-name" id="dcName">Votre Nom</div>
+          <div class="dc-role" id="dcRole">Développeur Informatique</div>
+          <div class="dc-stitle">Spécialité :</div>
+          <ul class="dc-specs" id="dcSpecs"><li>Développement Web</li><li>Scripts Termux</li><li>Automatisation</li></ul>
+        </div>
+      </div>
+      <div class="dc-div"></div>
+      <div>
+        <div class="dc-ml">Matricule développeur :</div>
+        <div class="dc-mat" id="dcMat">DEV-2026-001</div>
+        <div class="dc-lv" id="dcLv">Niveau : Développeur en formation</div>
+        <div class="dc-co" id="dcCo">🇨🇮 Côte d'Ivoire</div>
+        <div class="dc-bot">
+          <div style="flex:1">
+            <div class="dc-ch" id="dcCh">Kira – WhatsApp Channel</div>
+            <div class="dc-mem"><div class="dc-dot"></div>Membre Officiel – Dev Community Africa</div>
+            <div class="dc-idn" id="dcIdn">ID : LABO-DEV-CI-001 · 2026</div>
+          </div>
+          <div><canvas id="qrC" width="58" height="58" class="dc-qr"></canvas><div class="dc-qrl">Scanner pour<br>rejoindre</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="box">
+    <div class="box-t">✏️ Informations personnelles</div>
+    <div class="fr">
+      <div class="fg"><label>Prénom</label><input type="text" id="fPre" placeholder="Abou" oninput="updateCard()"></div>
+      <div class="fg"><label>Nom</label><input type="text" id="fNom" placeholder="Diomandé" oninput="updateCard()"></div>
+    </div>
+    <div class="fg"><label>Titre / Rôle</label><input type="text" id="fRole" placeholder="Développeur Informatique" oninput="updateCard()"></div>
+    <div class="fg"><label>Spécialités (virgules)</label><textarea id="fSpecs" rows="2" placeholder="Développement Web, Scripts Termux" oninput="updateCard()"></textarea></div>
+    <div class="fr">
+      <div class="fg"><label>Niveau</label><select id="fLv" onchange="updateCard()"><option>Développeur en formation</option><option>Développeur Junior</option><option>Développeur Confirmé</option><option>Expert / Mentor</option></select></div>
+      <div class="fg"><label>Pays</label><select id="fCo" onchange="updateCard()"><option value="🇨🇮 Côte d'Ivoire">🇨🇮 Côte d'Ivoire</option><option value="🇸🇳 Sénégal">🇸🇳 Sénégal</option><option value="🌍 Afrique">🌍 Afrique</option></select></div>
+    </div>
+    <div class="fg"><label>Canal WhatsApp</label><input type="text" id="fCh" placeholder="Kira – WhatsApp Channel" oninput="updateCard()"></div>
+    <div class="fg"><label>Photo de profil</label><input type="file" id="fPhoto" accept="image/*" onchange="loadPhoto(this)" style="color:var(--tx)"></div>
+    <button class="btn btn-o btn-fw" onclick="saveCard()">💾 SAUVEGARDER MA CARTE</button>
+  </div>
+</div>
+
+<div class="page" id="page-cards">
+  <p class="pg-t">// MES CARTES DÉVELOPPEUR</p>
+  <p class="pg-s">Toutes vos cartes sauvegardées.</p>
+  <div id="cardsList"></div>
+  <div id="cardView" style="display:none;margin-top:11px">
+    <div class="dev-card" id="viewCard"></div>
+    <div style="display:flex;gap:7px;margin-top:10px;flex-wrap:wrap">
+      <button class="btn btn-gh btn-sm" onclick="document.getElementById('cardView').style.display='none'">✕ Fermer</button>
+      <button class="btn btn-o btn-sm" onclick="shareActive()">📤 Partager</button>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="page-classes">
+  <p class="pg-t">// MES CLASSES — CP1 à CM3</p>
+  <p class="pg-s" id="classCount">Classes disponibles</p>
+  <div class="ld" id="ld"></div>
+  <div id="classLevels"></div>
+</div>
+
+<div class="page" id="page-editor">
+  <p class="pg-t">// ÉDITEUR DE CODE</p>
+  <p class="pg-s">Écrivez du vrai code · RUN pour exécuter</p>
+  <div class="box"><div class="box-t">Langage</div><div id="langBtns" style="display:flex;flex-wrap:wrap;gap:6px"></div></div>
+  <div class="ed-wrap">
+    <div class="ed-top"><div class="ed-inf">📝 code.<span id="edExt">js</span> <span class="lt" id="edLang">JavaScript</span></div><div class="ed-ac"><button class="clb" onclick="clearEd()">🗑</button><button class="rb" onclick="runCode()">▶ RUN</button></div></div>
+    <textarea class="cta" id="codeTA" spellcheck="false" placeholder="// Écrivez votre code ici..."></textarea>
+    <div class="ob"><div class="obl">&gt; OUTPUT</div><div id="codeOut" style="font-family:var(--mn);font-size:.73rem;line-height:1.7"><span style="color:var(--cy)">// Cliquez RUN</span></div></div>
+  </div>
+  <div class="box"><div class="box-t">📚 Exemples</div><div id="exBtns" style="display:flex;flex-wrap:wrap;gap:6px"></div></div>
+</div>
+
+<div class="page" id="page-termux">
+  <p class="pg-t">// TERMUX – TERMINAL ANDROID</p>
+  <p class="pg-s">Maîtrisez le terminal de votre téléphone comme un pro !</p>
+  <div class="box">
+    <div class="box-t">📖 Qu'est-ce que Termux ?</div>
+    <div style="font-size:.8rem;line-height:1.82;color:rgba(240,232,216,.82)">
+      Termux transforme votre téléphone en vrai ordinateur de développeur.
+      <div style="background:#020810;border:1px solid rgba(0,255,136,.14);border-radius:5px;padding:9px 11px;font-family:var(--mn);font-size:.68rem;color:var(--gr);margin-top:9px;line-height:1.7">📱 Téléchargez sur F-Droid (GRATUIT)<br>⚠️ Pas le Play Store (obsolète)</div>
+    </div>
+  </div>
+  <div class="box"><div class="box-t">📋 Commandes essentielles</div><div id="termCmds" style="display:flex;flex-direction:column;gap:6px"></div></div>
+  <div class="box">
+    <div class="box-t">🖥️ Simulateur Termux</div>
+    <div class="tw">
+      <div class="tb"><div class="tds"><div class="td" style="background:#FF5F57"></div><div class="td" style="background:#FFBD2E"></div><div class="td" style="background:#28CA41"></div></div><div class="tt">Termux · LABO IA</div></div>
+      <div class="ts" id="termS"><div class="tl-row"><span class="to">Bienvenue dans LABO IA &amp; TERMUX ACADEMY !</span></div><div class="tl-row"><span class="to">Tapez "aide" pour voir les commandes.</span></div></div>
+      <div class="tir"><span class="tp2">$ dev@labo ~ </span><input class="ti" id="termI" placeholder="Tapez une commande..." onkeydown="if(event.key==='Enter')runTerm()"><button class="tgo" onclick="runTerm()">↵</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="page-infini">
+  <p class="pg-t">// LANGAGE INFINI</p>
+  <p class="pg-s">Le premier langage de programmation en français africain.</p>
+  <div class="box" style="border-color:rgba(255,215,0,.25)"><div class="box-t" style="color:var(--gd)">📖 Commandes</div><div id="infiniCmds" style="display:flex;flex-direction:column;gap:6px"></div></div>
+  <div class="box">
+    <div class="box-t">💻 Éditeur INFINI</div>
+    <textarea id="ilTA" class="cta" style="border:1px solid rgba(255,215,0,.14);border-radius:5px;display:block;width:100%;min-height:130px" placeholder="dire 'Bonjour Dev !'"></textarea>
+    <div style="display:flex;gap:6px;margin-top:8px"><button class="btn btn-gd btn-sm" onclick="runInfini()">▶ Exécuter</button><button class="btn btn-gh btn-sm" onclick="document.getElementById('ilTA').value='';document.getElementById('ilOut').textContent='// Output...'">🗑 Effacer</button></div>
+    <div style="background:#020810;border:1px solid rgba(255,215,0,.1);border-radius:5px;padding:10px 12px;margin-top:8px;font-family:var(--mn);font-size:.72rem;color:var(--gr);min-height:60px;line-height:1.7" id="ilOut">// Output...</div>
+  </div>
+  <div class="box"><div class="box-t">🔥 Exemples</div><div id="infiniExs" style="display:flex;flex-direction:column;gap:7px"></div></div>
+</div>
+
+<div class="page" id="page-quiz">
+  <p class="pg-t">// QUIZ INTERACTIF</p>
+  <p class="pg-s">Testez vos connaissances · Gagnez des XP</p>
+  <div class="box"><div class="box-t">Catégorie</div><div id="qCatBtns" style="display:flex;flex-wrap:wrap;gap:6px"></div></div>
+  <div id="quizArea"></div>
+</div>
+
+<div class="page" id="page-ai">
+  <p class="pg-t">// PROF IA — Hors-ligne</p>
+  <p class="pg-s">Posez vos questions en texte ou en voix.</p>
+  <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:9px">
+    <button id="spTog" class="sp-tog" onclick="toggleVoice()">🔊 Voix IA : OFF</button>
+    <button id="micBtn" class="micBtn-style" onclick="toggleMic()">🎤 Micro</button>
+  </div>
+  <div id="micStatus" style="font-family:var(--mn);font-size:.58rem;color:var(--mt);margin-bottom:8px">// Tapez votre question</div>
+  <div class="chatbox" id="chatbox"></div>
+  <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:9px" id="qQuicks"></div>
+  <div style="display:flex;gap:7px">
+    <input id="chatI" style="flex:1;background:rgba(0,212,255,.04);border:1.5px solid rgba(0,212,255,.15);border-radius:6px;padding:10px 12px;color:var(--tx);font-size:.85rem;outline:none" placeholder="Posez votre question..." onkeydown="if(event.key==='Enter')sendChat()">
+    <button id="sendBtn" class="btn btn-cy btn-sm" onclick="sendChat()">Envoyer</button>
+  </div>
+</div>
+
+<div class="page" id="page-stats">
+  <p class="pg-t">// MES STATISTIQUES</p>
+  <p class="pg-s">Votre progression complète.</p>
+  <div class="sg" id="statsGrid"></div>
+  <div class="box" style="border-color:rgba(0,212,255,.2)"><div class="box-t" style="color:var(--cy)">🏅 Tous mes badges</div><div id="allBadges" style="display:flex;flex-wrap:wrap;gap:7px"></div></div>
+  <div style="text-align:center;margin-top:14px"><button class="btn btn-rs btn-sm" onclick="if(confirm('Remettre à zéro toute la progression ?')){localStorage.clear();location.reload();}">🗑 Remettre à zéro</button></div>
+</div>
+
+<div class="page" id="page-snake">
+  <p class="pg-t">// SNAKE — Dev Edition</p>
+  <p class="pg-s">Mangez les pommes, évitez les murs.</p>
+  <div class="box">
+    <div class="game-info">
+      <div><span style="font-family:var(--mn);font-size:.6rem;color:var(--mt)">SCORE</span><br><span class="game-score" id="snakeScore">0</span></div>
+      <div style="text-align:center"><div style="font-family:var(--mn);font-size:.6rem;color:var(--mt)">NIVEAU</div><div style="font-family:var(--mn);font-size:1rem;font-weight:800;color:var(--cy)" id="snakeLvl">1</div></div>
+      <div style="text-align:right"><span style="font-family:var(--mn);font-size:.6rem;color:var(--mt)">RECORD</span><br><span class="game-hiscore" id="snakeHi">0</span></div>
+    </div>
+    <canvas id="snakeCanvas" width="300" height="300"></canvas>
+    <div style="text-align:center;margin-top:8px"><button class="btn btn-o btn-sm" id="snakeStartBtn" onclick="snakeStart()">▶ DÉMARRER</button><button class="btn btn-gh btn-sm" onclick="snakePause()" style="margin-left:5px" id="snakePauseBtn">⏸ Pause</button></div>
+    <div class="dpad"><div class="dp dp-up" onclick="snakeDir(0,-1)">▲</div><div class="dp dp-left" onclick="snakeDir(-1,0)">◀</div><div class="dp dp-mid" id="snakeStatus">TAP</div><div class="dp dp-right" onclick="snakeDir(1,0)">▶</div></div>
+    <div style="text-align:center;margin-top:4px"><button class="dp" style="width:100%;max-width:150px;height:48px" onclick="snakeDir(0,1)">▼</button></div>
+  </div>
+</div>
+
+<div class="page" id="page-exercices">
+  <p class="pg-t">// EXERCICES PRATIQUES</p>
+  <p class="pg-s">Exercices — du CP au CM3, Termux et INFINI</p>
+  <div class="box"><div class="box-t">🔍 Filtrer</div><input class="glo-search" id="exSearch" placeholder="Rechercher..." oninput="filterEx()" style="margin-bottom:8px"><div id="exCatFilter" style="display:flex;flex-wrap:wrap;gap:5px"></div></div>
+  <div id="exList"></div>
+</div>
+
+<div class="page" id="page-notes">
+  <p class="pg-t">// MES NOTES DEV</p>
+  <p class="pg-s">Gardez vos notes, snippets et idées.</p>
+  <div class="box">
+    <div class="box-t">✏️ Nouvelle note</div>
+    <input class="note-in" id="noteTitleI" placeholder="Titre de la note...">
+    <textarea class="note-ta" id="noteBodyI" placeholder="Votre note, snippet, idée..."></textarea>
+    <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"><button class="btn btn-gd btn-sm" onclick="saveNote()">💾 Sauvegarder</button><button class="btn btn-gh btn-sm" onclick="cancelNote()">✕ Annuler</button></div>
+  </div>
+  <div id="notesList"></div>
+</div>
+
+<div class="page" id="page-glossaire">
+  <p class="pg-t">// GLOSSAIRE INFORMATIQUE</p>
+  <p class="pg-s">Termes techniques expliqués simplement.</p>
+  <input class="glo-search" id="gloSearch" placeholder="🔍 Rechercher un terme..." oninput="filterGlo()">
+  <div id="gloList"></div>
+</div>
+
+</div>
+
+<div id="toast"></div>
+<div class="badge-overlay" id="badgeOverlay">
+  <div class="badge-box">
+    <span class="badge-ico" id="badgeIco">🏆</span>
+    <div class="badge-title" id="badgeTitle">Badge débloqué !</div>
+    <div class="badge-desc" id="badgeDesc">Description du badge.</div>
+    <button class="btn btn-gd" onclick="document.getElementById('badgeOverlay').classList.remove('show')">Super ! 🔥</button>
+  </div>
+</div>
+
+<script>
+window.IS_ANDROID = false;
+window.onAndroidReady = function(){
+  window.IS_ANDROID = true;
+  var b = document.getElementById('androidBadge');
+  if(b){b.style.display='block';setTimeout(function(){b.style.display='none';},3000);}
+};
+function nativeToast(msg){ if(window.AndroidBridge && window.AndroidBridge.showToast){window.AndroidBridge.showToast(msg);return true;} return false; }
+function nativeVibrate(ms){ if(window.AndroidBridge && window.AndroidBridge.vibrate){window.AndroidBridge.vibrate(ms||40);} }
+function nativeShare(text){ if(window.AndroidBridge && window.AndroidBridge.shareText){window.AndroidBridge.shareText(text);return true;} return false; }
+
+// ══════════════════════════════════════════════════════════
+// API & SYNCHRONISATION — LABO IA Server
+// ══════════════════════════════════════════════════════════
+var API_URL = 'https://laboiaserver.onrender.com';
+var authToken = localStorage.getItem('lb7_token') || null;
+var currentUser = null;
+try { currentUser = JSON.parse(localStorage.getItem('lb7_user') || 'null'); } catch(e) { currentUser = null; }
+var isOnlineMode = false;   // true seulement si connecté ET serveur joignable
+var syncInFlight = false;
+
+function setSyncStatus(state, msg) {
+  var el = document.getElementById('syncStatus');
+  if (!el) return;
+  el.className = 'show' + (state ? ' ' + state : '');
+  el.textContent = msg || '';
+  if (state === 'ok') {
+    setTimeout(function(){ el.classList.remove('show'); }, 2500);
+  }
+}
+
+async function apiFetch(path, options) {
+  options = options || {};
+  options.headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers || {});
+  if (authToken) options.headers['Authorization'] = 'Bearer ' + authToken;
+
+  var controller = new AbortController();
+  var timeoutId = setTimeout(function(){ controller.abort(); }, 12000);
+
+  try {
+    var res = await fetch(API_URL + path, Object.assign({}, options, { signal: controller.signal }));
+    clearTimeout(timeoutId);
+    var data = null;
+    try { data = await res.json(); } catch(e) { data = null; }
+    if (!res.ok) {
+      var err = new Error((data && data.error) || ('Erreur ' + res.status));
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    throw err;
+  }
+}
+
+// ── Inscription / Connexion ──
+var authMode = 'login';
+function setAuthMode(mode) {
+  authMode = mode;
+  document.getElementById('tabLogin').className = 'auth-tab' + (mode === 'login' ? ' on' : '');
+  document.getElementById('tabRegister').className = 'auth-tab' + (mode === 'register' ? ' on' : '');
+  document.getElementById('registerFields').style.display = mode === 'register' ? 'block' : 'none';
+  document.getElementById('authSubmitBtn').textContent = mode === 'register' ? "S'inscrire" : 'Se connecter';
+  document.getElementById('authErr').classList.remove('show');
+  document.getElementById('authOk').classList.remove('show');
+}
+
+async function submitAuth() {
+  var errEl = document.getElementById('authErr');
+  var okEl = document.getElementById('authOk');
+  errEl.classList.remove('show'); okEl.classList.remove('show');
+
+  var email = document.getElementById('authEmail').value.trim();
+  var password = document.getElementById('authPassword').value;
+  var prenom = (document.getElementById('authPrenom') || {}).value || '';
+  var nom = (document.getElementById('authNom') || {}).value || '';
+
+  if (!email || !password) {
+    errEl.textContent = '⚠️ Email et mot de passe sont requis.';
+    errEl.classList.add('show');
+    return;
+  }
+  if (authMode === 'register' && !prenom.trim()) {
+    errEl.textContent = '⚠️ Le prénom est requis pour créer un compte.';
+    errEl.classList.add('show');
+    return;
+  }
+
+  var btn = document.getElementById('authSubmitBtn');
+  var originalText = btn.textContent;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="auth-spin"></span>Patientez...';
+
+  try {
+    var path = authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
+    var body = authMode === 'register'
+      ? { prenom: prenom.trim(), nom: nom.trim(), email: email, password: password }
+      : { email: email, password: password };
+
+    var data = await apiFetch(path, { method: 'POST', body: JSON.stringify(body) });
+
+    authToken = data.token;
+    currentUser = data.user;
+    localStorage.setItem('lb7_token', authToken);
+    localStorage.setItem('lb7_user', JSON.stringify(currentUser));
+
+    okEl.textContent = '✅ ' + (data.message || 'Connecté !');
+    okEl.classList.add('show');
+    isOnlineMode = true;
+
+    await pullProgressFromServer();
+
+    setTimeout(function() {
+      document.getElementById('authScreen').classList.remove('show');
+      enterApp();
+    }, 600);
+  } catch (err) {
+    errEl.textContent = '❌ ' + (err.message || 'Erreur de connexion au serveur.');
+    errEl.classList.add('show');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+function skipAuth() {
+  isOnlineMode = false;
+  document.getElementById('authScreen').classList.remove('show');
+  enterApp();
+}
+
+function logout() {
+  authToken = null;
+  currentUser = null;
+  isOnlineMode = false;
+  localStorage.removeItem('lb7_token');
+  localStorage.removeItem('lb7_user');
+  toast('👋 Déconnecté. Vos données restent sauvegardées localement.');
+  renderHome();
+}
+
+// ── Synchronisation : descend la progression du serveur vers le local ──
+async function pullProgressFromServer() {
+  if (!authToken) return;
+  try {
+    var data = await apiFetch('/api/progress', { method: 'GET' });
+    var p = data.progress || {};
+    // Fusionne avec le local existant (prend le maximum, ne perd jamais rien)
+    sv('xp', Math.max(ld('xp') || 0, p.xp || 0));
+    sv('cdone', Array.from(new Set([...(ld('cdone') || []), ...(p.cdone || [])])));
+    sv('ex_done', Array.from(new Set([...(ld('ex_done') || []), ...(p.ex_done || [])])));
+    sv('badges', Array.from(new Set([...(ld('badges') || []), ...(p.badges || [])])));
+    sv('snake_hi', Math.max(ld('snake_hi') || 0, p.snake_hi || 0));
+    setSyncStatus('ok', '✅ Synchronisé');
+  } catch (err) {
+    setSyncStatus('offline', '⚠️ Hors-ligne — données locales utilisées');
+  }
+}
+
+// ── Synchronisation : envoie la progression locale vers le serveur ──
+async function pushProgressToServer() {
+  if (!authToken || syncInFlight) return;
+  syncInFlight = true;
+  try {
+    var body = {
+      xp: ld('xp') || 0,
+      cdone: ld('cdone') || [],
+      ex_done: ld('ex_done') || [],
+      badges: ld('badges') || [],
+      snake_hi: ld('snake_hi') || 0,
+      quiz_perfect: ld('quiz_perfect') || 0,
+    };
+    await apiFetch('/api/progress', { method: 'PUT', body: JSON.stringify(body) });
+    setSyncStatus('ok', '✅ Sauvegardé en ligne');
+    isOnlineMode = true;
+  } catch (err) {
+    setSyncStatus('offline', '⚠️ Hors-ligne — sauvegarde locale seulement');
+    isOnlineMode = false;
+  } finally {
+    syncInFlight = false;
+  }
+}
+
+// Synchronise automatiquement, mais sans jamais bloquer l'UI si ça échoue
+var syncDebounceTimer = null;
+function scheduleSync() {
+  if (!authToken) return;
+  clearTimeout(syncDebounceTimer);
+  syncDebounceTimer = setTimeout(function() { pushProgressToServer(); }, 1500);
+}
+
+function enterApp() {
+  var s = document.getElementById('splash');
+  var a = document.getElementById('app');
+  if (s) s.style.display = 'none';
+  if (a) a.style.display = 'block';
+  refreshXP();
+  renderHome();
+  sv('visited', '1');
+}
+
+
+var NOW=new Date();
+var DAYS=['Dimanche','Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi'];
+var MONTHS=['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+
+function ld(k){try{var v=localStorage.getItem('lb7_'+k);return v?JSON.parse(v):null;}catch(e){return null;}}
+function sv(k,v){try{localStorage.setItem('lb7_'+k,JSON.stringify(v));}catch(e){}}
+
+var toastTimer=null;
+function toast(m){ nativeVibrate(30); var t=document.getElementById('toast');if(!t)return; t.textContent=m;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(function(){t.classList.remove('show');},2800); }
+
+function addXP(n){var xp=(ld('xp')||0)+n;sv('xp',xp);refreshXP();toast('★ +'+n+' XP !');checkBadges();scheduleSync();}
+function refreshXP(){var xp=ld('xp')||0;var lv=Math.floor(xp/200)+1;var xpEl=document.getElementById('xpN');var fEl=document.getElementById('xpF');var lvEl=document.getElementById('xpLv');if(xpEl)xpEl.textContent=xp+' XP';if(fEl)fEl.style.width=((xp%200)/200*100)+'%';if(lvEl)lvEl.textContent='DEV_'+(lv<10?'0'+lv:''+lv);}
+
+var BADGES=[
+  {id:'first_xp',ico:'⭐',title:'Premier XP',desc:'Premiers points XP gagnés !',cond:function(){return (ld('xp')||0)>=1;}},
+  {id:'xp100',ico:'💫',title:'100 XP',desc:'100 XP atteints !',cond:function(){return (ld('xp')||0)>=100;}},
+  {id:'xp500',ico:'🔥',title:'500 XP',desc:'500 XP ! En feu !',cond:function(){return (ld('xp')||0)>=500;}},
+  {id:'first_card',ico:'🃏',title:'Première Carte',desc:'Carte développeur créée !',cond:function(){return (ld('dcards')||[]).length>=1;}},
+  {id:'class5',ico:'📚',title:'5 Classes',desc:'5 classes complétées !',cond:function(){return (ld('cdone')||[]).length>=5;}},
+  {id:'class10',ico:'🎓',title:'Mi-Parcours',desc:'10 classes complétées !',cond:function(){return (ld('cdone')||[]).length>=10;}},
+  {id:'snake100',ico:'🐍',title:'Snake — 100 pts',desc:'100 points au Snake !',cond:function(){return (ld('snake_hi')||0)>=100;}},
+  {id:'note1',ico:'📝',title:'Première Note',desc:'Première note dev !',cond:function(){return (ld('notes')||[]).length>=1;}},
+];
+
+function checkBadges(){var earned=ld('badges')||[];var newOnes=[];BADGES.forEach(function(b){if(!earned.includes(b.id)&&b.cond()){earned.push(b.id);newOnes.push(b);}});if(newOnes.length){sv('badges',earned);setTimeout(function(){showBadge(newOnes[0]);},500);}}
+function showBadge(b){var ov=document.getElementById('badgeOverlay');document.getElementById('badgeIco').textContent=b.ico;document.getElementById('badgeTitle').textContent=b.title;document.getElementById('badgeDesc').textContent=b.desc;ov.classList.add('show');nativeVibrate(100);}
+
+function launch(){
+  var s=document.getElementById('splash');if(!s)return;
+  s.style.opacity='0';s.style.transition='opacity .45s';
+  setTimeout(function(){
+    s.style.display='none';
+    if (authToken && currentUser) {
+      // Déjà connecté lors d'une session précédente : on entre directement,
+      // puis on tente une synchro silencieuse en arrière-plan.
+      enterApp();
+      pullProgressFromServer();
+    } else {
+      document.getElementById('authScreen').classList.add('show');
+    }
+  },450);
+}
+
+document.addEventListener('DOMContentLoaded',function(){
+  if(ld('visited')){
+    document.getElementById('splash').style.display='none';
+    if (authToken && currentUser) {
+      enterApp();
+      pullProgressFromServer();
+    } else {
+      document.getElementById('authScreen').classList.add('show');
+    }
+  }
+});
+
+function go(pageId,tabEl){
+  document.querySelectorAll('.page').forEach(function(p){p.classList.remove('on');});
+  document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('on');});
+  var pg=document.getElementById('page-'+pageId);if(pg)pg.classList.add('on');
+  if(tabEl)tabEl.classList.add('on');
+  if(pageId==='classes')renderClasses();
+  else if(pageId==='cards')renderCards();
+  else if(pageId==='ai')initAI();
+  else if(pageId==='stats')renderStats();
+  else if(pageId==='snake')initSnake();
+  else if(pageId==='notes')renderNotes();
+  else if(pageId==='glossaire')initGlossaire();
+  else if(pageId==='exercices')initExercices();
+  else if(pageId==='termux')initTermux();
+  else if(pageId==='infini')initInfini();
+  else if(pageId==='quiz')initQuiz();
+  else if(pageId==='home')renderHome();
+  else if(pageId==='editor')initEditor();
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+var TIPS=['// Pratiquez 15 min/jour !','// console.log() est votre meilleur ami.','// Termux = ordinateur de dev sur Android.','// HTML = structure · CSS = apparence · JS = comportement','// Git = assurance-vie de votre code.'];
+function renderHome(){
+  var d=document.getElementById('hDate');if(d)d.textContent=DAYS[NOW.getDay()]+' '+NOW.getDate()+' '+MONTHS[NOW.getMonth()]+' '+NOW.getFullYear();
+  var wEl=document.getElementById('hWelcome');var cards=ld('dcards')||[];var name=cards.length?cards[0].prenom:'Dev';
+  if(wEl)wEl.innerHTML='// Bonjour <strong style="color:var(--or)">'+name+'</strong> 👋 — Bienvenue v7 !<br>// 100% hors-ligne · Côte d\'Ivoire 🇨🇮';
+  var xp=ld('xp')||0,cdone=ld('cdone')||[],exdone=ld('ex_done')||[];
+  var stats=[{ico:'⚡',v:xp,lbl:'XP Total'},{ico:'📚',v:cdone.length,lbl:'Classes'},{ico:'🏋️',v:exdone.length,lbl:'Exercices'},{ico:'🏅',v:(ld('badges')||[]).length,lbl:'Badges'}];
+  var sEl=document.getElementById('hStats');if(sEl)sEl.innerHTML=stats.map(function(s){return '<div class="sc"><span class="si">'+s.ico+'</span><strong>'+s.v+'</strong><small>'+s.lbl+'</small></div>';}).join('');
+  var nEl=document.getElementById('hNext');
+  if(nEl){var nextClass=CLASSES.find(function(c){return !cdone.includes(c.id);});nEl.innerHTML=nextClass?'📚 Prochaine leçon : <strong style="color:var(--or)">'+nextClass.num+' — '+nextClass.title+'</strong>':'✅ <strong style="color:var(--gr)">Toutes les classes terminées !</strong>';}
+  var tipEl=document.getElementById('hTip');if(tipEl)tipEl.textContent=TIPS[NOW.getDay()%TIPS.length];
+  var bEl=document.getElementById('hBadges');var earned=ld('badges')||[];
+  if(bEl)bEl.innerHTML=earned.length?earned.map(function(id){var b=BADGES.find(function(x){return x.id===id;});return b?'<span title="'+b.title+'" style="font-size:1.3rem">'+b.ico+'</span>':'';}).join(''):'<span style="font-size:.72rem;color:var(--mt);font-family:var(--mn)">// Gagnez des XP !</span>';
+}
+
+var CLASSES=[
+  {id:'cp1',icon:'🖥️',num:'CP1',title:"C'est quoi un ordinateur ?",lang:'Théorie',pts:20,level:'CP',body:'<div class="def">💻 Un ordinateur traite, stocke et affiche des informations.</div><div class="cb">CPU=cerveau\nRAM=bureau de travail\nSSD=étagère\nGPU=yeux</div>',quiz:{q:"Quel composant est le cerveau ?",opts:['RAM','Écran','CPU','Clavier'],a:2,e:'Le CPU est le cerveau !'}},
+  {id:'cp2',icon:'⌨️',num:'CP2',title:'Matériel et logiciels',lang:'Théorie',pts:20,level:'CP',body:'<div class="def">🔧 Hardware = physique. 💾 Software = programmes.</div>',quiz:{q:'WhatsApp est...',opts:['Hardware','Software','CPU'],a:1,e:'WhatsApp est un logiciel !'}},
+  {id:'cp3',icon:'🌐',num:'CP3',title:'Internet et le Web',lang:'Théorie',pts:20,level:'CP',body:'<div class="def">🌐 Internet = infrastructure. 🔗 Web = service.</div>',quiz:{q:'Internet et Web identiques ?',opts:['Oui','Non'],a:1,e:'Différents !'}},
+  {id:'ce1',icon:'📄',num:'CE1',title:'HTML — Structure',lang:'HTML',pts:30,level:'CE',body:'<div class="cb">&lt;html&gt;&lt;body&gt;&lt;h1&gt;Titre&lt;/h1&gt;&lt;/body&gt;&lt;/html&gt;</div>',quiz:{q:'Balise pour grand titre ?',opts:['title','head','h1'],a:2,e:'h1 !'},code:'console.log("<h1>Bonjour LABO IA !</h1>");'},
+  {id:'ce2',icon:'🎨',num:'CE2',title:'CSS — Mise en forme',lang:'CSS',pts:30,level:'CE',body:'<div class="cb">h1 { color: #FF6B00; }</div>',quiz:{q:'Syntaxe couleur rouge ?',opts:['h1.color=red','h1{color:red;}'],a:1,e:'h1{color:red;} !'},code:'console.log("h1 { color: #FF6B00; }");'},
+  {id:'cm1',icon:'⚡',num:'CM1',title:'JavaScript — Variables',lang:'JavaScript',pts:40,level:'CM1',body:'<div class="cb">let nom="Abou";\nconst PAYS="CI";</div>',quiz:{q:'Variable non modifiable ?',opts:['let','var','const'],a:2,e:'const !'},code:'const prenom="Abou";console.log("Nom:",prenom);'},
+  {id:'cm2',icon:'🔀',num:'CM2',title:'JavaScript — Conditions',lang:'JavaScript',pts:40,level:'CM1',body:'<div class="cb">if(score>=90){console.log("Excellent")}</div>',quiz:{q:'Que compare === ?',opts:['Valeur seule','Valeur ET type'],a:1,e:'Valeur ET type !'},code:'let score=85;if(score>=90)console.log("Excellent");else console.log("Bien");'},
+  {id:'cm3',icon:'🔁',num:'CM3',title:'JavaScript — Boucles',lang:'JavaScript',pts:40,level:'CM1',body:'<div class="cb">for(let i=1;i&lt;=5;i++){console.log(i)}</div>',quiz:{q:'Méthode pour itérer un tableau ?',opts:['for.each()','forEach()'],a:1,e:'forEach() !'},code:'let total=0;for(let i=1;i<=10;i++){total+=i;}console.log("Somme:",total);'},
+  {id:'cm4',icon:'⚙️',num:'CM4',title:'JavaScript — Fonctions',lang:'JavaScript',pts:40,level:'CM1',body:'<div class="cb">function saluer(p){return "Bonjour "+p;}</div>',quiz:{q:'Que fait return ?',opts:['Arrête tout','Renvoie une valeur'],a:1,e:'Renvoie une valeur !'},code:'function saluer(p){return "Bonjour "+p+" !";}console.log(saluer("Abou"));'},
+  {id:'cm2a',icon:'📋',num:'CM2-A',title:'JavaScript — Tableaux',lang:'JavaScript',pts:45,level:'CM2',body:'<div class="cb">let devs=["Abou","Marie"];devs.push("Kira");</div>',quiz:{q:'Ajouter en fin de tableau ?',opts:['add()','push()'],a:1,e:'push() !'},code:'let fruits=["Mangue","Ananas"];fruits.push("Papaye");console.log(fruits.join(", "));'},
+  {id:'cm2b',icon:'🏗️',num:'CM2-B',title:'JavaScript — Objets',lang:'JavaScript',pts:45,level:'CM2',body:'<div class="cb">let dev={nom:"Abou",ville:"Abidjan"};</div>',quiz:{q:'Accéder à dev.nom ?',opts:['dev->nom','dev.nom'],a:1,e:'dev.nom !'},code:'let dev={nom:"Abou",ville:"Abidjan"};console.log(dev.nom,dev.ville);'},
+  {id:'py1',icon:'🐍',num:'PY1',title:'Python — Variables',lang:'Python',pts:50,level:'PY',body:'<div class="cb">nom="Abou"\nprint(f"Bonjour {nom}")</div>',quiz:{q:'Afficher en Python ?',opts:['console.log()','print()'],a:1,e:'print() !'},code:'console.log("Simulation: print(f\\"Bonjour Abou\\")");'},
+  {id:'git1',icon:'🔗',num:'GIT1',title:'Git — Versions',lang:'Git',pts:40,level:'OUTILS',body:'<div class="cb">git init\ngit add .\ngit commit -m "msg"\ngit push</div>',quiz:{q:'Sauvegarder une version ?',opts:['git save','git commit -m "msg"'],a:1,e:'git commit -m "msg" !'}},
+  {id:'srv1',icon:'🖧',num:'SRV1',title:'Node.js — Serveur',lang:'Node.js',pts:70,level:'SERVEUR',body:'<div class="cb">const http=require("http");\nhttp.createServer((req,res)=>{res.end("OK")}).listen(3000);</div>',quiz:{q:'Module natif HTTP ?',opts:['express','http'],a:1,e:'http !'}},
+];
+
+var LEVEL_GROUPS=[
+  {key:'CP',label:'CP — Bases Informatique',color:'rgba(0,255,136,.1)',bc:'rgba(0,255,136,.3)',desc:'Ordinateurs, Internet'},
+  {key:'CE',label:'CE — HTML & CSS',color:'rgba(0,212,255,.1)',bc:'rgba(0,212,255,.3)',desc:'Pages web, styles'},
+  {key:'CM1',label:'CM1 — JavaScript Bases',color:'rgba(255,215,0,.1)',bc:'rgba(255,215,0,.3)',desc:'Variables, conditions, boucles'},
+  {key:'CM2',label:'CM2 — JavaScript Avancé',color:'rgba(255,107,0,.1)',bc:'rgba(255,107,0,.3)',desc:'Tableaux, objets'},
+  {key:'PY',label:'PY — Python',color:'rgba(0,255,136,.1)',bc:'rgba(0,255,136,.3)',desc:'Variables Python'},
+  {key:'OUTILS',label:'OUTILS — Git',color:'rgba(155,89,255,.1)',bc:'rgba(155,89,255,.3)',desc:'Versioning'},
+  {key:'SERVEUR',label:'SERVEUR — Node.js',color:'rgba(255,215,0,.1)',bc:'rgba(255,215,0,.3)',desc:'Backend'},
+];
+
+function renderClasses(){
+  var cdone=ld('cdone')||[];var total=CLASSES.length;
+  document.getElementById('classCount').textContent=cdone.length+'/'+total+' classes terminées';
+  var html='';
+  LEVEL_GROUPS.forEach(function(g){
+    var group=CLASSES.filter(function(c){return c.level===g.key;});if(!group.length)return;
+    html+='<div style="background:'+g.color+';border:1px solid '+g.bc+';border-radius:8px;padding:12px;margin-bottom:10px">';
+    html+='<div style="font-family:var(--mn);font-size:.7rem;font-weight:800;margin-bottom:4px">'+g.label+'</div>';
+    html+='<div style="font-size:.62rem;color:var(--mt);margin-bottom:9px">'+g.desc+'</div><div class="lg">';
+    group.forEach(function(c){
+      var done=cdone.includes(c.id);var idx=CLASSES.indexOf(c);var prevDone=idx===0||cdone.includes(CLASSES[idx-1].id);var locked=!done&&!prevDone;
+      html+='<div class="lc'+(done?' done':locked?' locked':'')+'" onclick="'+(locked?'toast("🔒 Terminez la leçon précédente !")':'openLesson(\''+c.id+'\')')+'">';
+      html+='<span class="lc-i">'+c.icon+'</span><div class="lc-n">'+c.num+'</div><div class="lc-t">'+c.title+'</div><div class="lc-l">'+c.lang+'</div><div class="lc-p">+'+c.pts+' XP</div></div>';
+    });
+    html+='</div></div>';
+  });
+  document.getElementById('classLevels').innerHTML=html;
+}
+
+function openLesson(id){
+  var c=CLASSES.find(function(x){return x.id===id;});if(!c)return;
+  var ldEl=document.getElementById('ld');var cdone=ld('cdone')||[];var done=cdone.includes(id);
+  ldEl.innerHTML='<div class="ld-hdr"><div class="ld-title">'+c.icon+' '+c.num+' — '+c.title+'</div><button class="btn btn-gh btn-sm" onclick="document.getElementById(\'ld\').classList.remove(\'show\')">✕</button></div><div class="ld-body">'+c.body+'</div>';
+  if(c.quiz){var q=c.quiz;ldEl.innerHTML+='<div class="qb"><div class="qt">🧠 '+q.q+'</div><div class="qo-list">'+q.opts.map(function(opt,i){return '<button class="qo" onclick="answerQuiz(\''+id+'\','+i+','+q.a+',this)">'+opt+'</button>';}).join('')+'</div><div class="qfb" id="qfb-'+id+'"></div></div>';}
+  var codeBtn=c.code?'<button class="btn btn-cy btn-sm" onclick="loadClassCode(\''+id+'\')">💻 Éditeur</button>':'';
+  var markBtn=done?'<span style="color:var(--gr);font-family:var(--mn);font-size:.68rem">✅ Complétée !</span>':'<button class="btn btn-gr btn-sm" onclick="completeLesson(\''+id+'\')">✅ Terminé +'+c.pts+' XP</button>';
+  ldEl.innerHTML+='<div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:11px">'+codeBtn+markBtn+'</div>';
+  ldEl.classList.add('show');ldEl.scrollIntoView({behavior:'smooth'});
+}
+
+function answerQuiz(id,chosen,correct,btn){
+  var btns=btn.parentNode.querySelectorAll('.qo');btns.forEach(function(b){b.disabled=true;});
+  var fb=document.getElementById('qfb-'+id);
+  if(chosen===correct){btn.classList.add('ok');if(fb){fb.textContent='✅ Correct ! '+CLASSES.find(function(c){return c.id===id;}).quiz.e;fb.className='qfb ok show';}addXP(10);}
+  else{btn.classList.add('nok');btns[correct].classList.add('ok');if(fb){fb.textContent='❌ '+CLASSES.find(function(c){return c.id===id;}).quiz.e;fb.className='qfb nok show';}}
+}
+
+function completeLesson(id){
+  var c=CLASSES.find(function(x){return x.id===id;});if(!c)return;
+  var cdone=ld('cdone')||[];
+  if(!cdone.includes(id)){cdone.push(id);sv('cdone',cdone);addXP(c.pts);toast('🎉 Leçon terminée !');scheduleSync();}
+  document.getElementById('ld').classList.remove('show');renderClasses();checkBadges();
+}
+
+function loadClassCode(id){var c=CLASSES.find(function(x){return x.id===id;});if(c&&c.code){var ta=document.getElementById('codeTA');if(ta)ta.value=c.code;go('editor',document.querySelectorAll('.tab')[4]);toast('// Code chargé !');}}
+
+var photoURL='';var cardCnt=ld('ccnt')||0;
+function padNum(n){return n<10?'00'+n:n<100?'0'+n:''+n;}
+function updateCard(){
+  var pre=(document.getElementById('fPre')||{}).value||'';var nom=(document.getElementById('fNom')||{}).value||'';
+  var role=(document.getElementById('fRole')||{}).value||'Développeur Informatique';
+  var specs=(document.getElementById('fSpecs')||{}).value||'Développement Web, Scripts Termux';
+  var lv=(document.getElementById('fLv')||{}).value||'Développeur en formation';
+  var co=(document.getElementById('fCo')||{}).value||"🇨🇮 Côte d'Ivoire";
+  var ch=(document.getElementById('fCh')||{}).value||'Kira – WhatsApp Channel';
+  var fullName=(pre+' '+nom).trim()||'Votre Nom';var num=padNum(cardCnt+1);
+  function st(id,v){var e=document.getElementById(id);if(e)e.textContent=v;}
+  st('dcName',fullName);st('dcRole',role);st('dcMat','DEV-2026-'+num);st('dcId','#DEV-2026-'+num);
+  st('dcLv','Niveau : '+lv);st('dcCo',co);st('dcCh',ch);st('dcIdn','ID : LABO-DEV-CI-'+num+' · '+NOW.toLocaleDateString('fr-FR'));
+  var spEl=document.getElementById('dcSpecs');
+  if(spEl){var spList=specs.split(',').filter(function(s){return s.trim();});spEl.innerHTML=spList.slice(0,4).map(function(s){return '<li>'+s.trim()+'</li>';}).join('');}
+  drawQR('LABO-DEV-CI-'+num,'qrC');
+}
+function drawQR(data,canvasId){
+  var cv=document.getElementById(canvasId);if(!cv)return;var ctx=cv.getContext('2d');var s=58;
+  ctx.fillStyle='#fff';ctx.fillRect(0,0,s,s);ctx.fillStyle='#000';
+  var seed=0;for(var i=0;i<data.length;i++)seed+=data.charCodeAt(i)*i;
+  var g=10,c=Math.floor(s/g);
+  for(var r=0;r<g;r++){for(var cc=0;cc<g;cc++){if((seed*(r+1)*(cc+1)*13+r*7+cc*11)%3===0){ctx.fillRect(cc*c+1,r*c+1,c-2,c-2);}}}
+  [[0,0],[0,g-3],[g-3,0]].forEach(function(pos){var rr=pos[0],rc=pos[1];ctx.fillStyle='#000';ctx.fillRect(rc*c,rr*c,c*3,c*3);ctx.fillStyle='#fff';ctx.fillRect(rc*c+c,rr*c+c,c,c);ctx.fillStyle='#000';ctx.fillRect(rc*c+c,rr*c+c,c-2,c-2);});
+}
+function loadPhoto(inp){if(!inp.files||!inp.files[0])return;var reader=new FileReader();reader.onload=function(e){photoURL=e.target.result;var img=document.getElementById('dcPhImg');var ico=document.getElementById('dcPhIco');if(img){img.src=photoURL;img.style.display='block';}if(ico)ico.style.display='none';};reader.readAsDataURL(inp.files[0]);}
+function saveCard(){
+  var pre=document.getElementById('fPre').value.trim();var nom=document.getElementById('fNom').value.trim();
+  if(!pre&&!nom){toast('⚠️ Entrez votre nom !');return;}
+  cardCnt++;sv('ccnt',cardCnt);var num=padNum(cardCnt);
+  var card={id:'c'+Date.now(),prenom:pre,nom:nom,role:document.getElementById('fRole').value.trim()||'Développeur Informatique',specs:document.getElementById('fSpecs').value.trim()||'Développement Web',level:document.getElementById('fLv').value,country:document.getElementById('fCo').value,channel:document.getElementById('fCh').value.trim()||'Kira – WhatsApp Channel',photo:photoURL,mat:'DEV-2026-'+num,idn:'LABO-DEV-CI-'+num,date:NOW.toLocaleDateString('fr-FR'),ts:Date.now()};
+  var cards=ld('dcards')||[];cards.push(card);sv('dcards',cards);
+  addXP(25);toast('✅ Carte sauvegardée !');updateCard();checkBadges();
+}
+var activeCardId='';
+function renderCards(){
+  var cards=ld('dcards')||[];var el=document.getElementById('cardsList');if(!el)return;
+  if(!cards.length){el.innerHTML='<div style="text-align:center;padding:28px;color:var(--mt);font-family:var(--mn);font-size:.76rem">// Aucune carte créée.</div>';return;}
+  el.innerHTML=cards.map(function(c){return '<div class="ci"><div class="ci-h"><div class="ci-ph">'+(c.photo?'<img src="'+c.photo+'" alt="">':'👤')+'</div><div class="ci-inf"><div class="ci-nm">'+c.prenom+' '+c.nom+'</div><div class="ci-rl">'+c.role+'</div><div class="ci-id">'+c.mat+'</div></div></div><div class="ci-ac"><button class="btn btn-o btn-sm" onclick="viewCard(\''+c.id+'\')">👁 Voir</button><button class="btn btn-gh btn-sm" onclick="doShare(\''+c.id+'\')">📤 Partager</button><button class="btn btn-rs btn-sm" onclick="delCard(\''+c.id+'\')">🗑</button></div></div>';}).join('');
+}
+function viewCard(id){
+  var cards=ld('dcards')||[];var c=cards.find(function(x){return x.id===id;});if(!c)return;activeCardId=id;
+  var spList=(c.specs||'').split(',').filter(function(s){return s.trim();});
+  var html='<div class="dc-hdr"><div class="dc-tri"></div><div class="dc-brand"><span class="dc-b1">LABO IA &amp;</span><span class="dc-b2">TERMUX ACADEMY</span></div><div class="dc-idtag">#'+c.mat+'</div></div>';
+  html+='<div class="dc-body"><div class="dc-photo">'+(c.photo?'<img src="'+c.photo+'" alt="" style="display:block">':'<span class="dc-ph-ico">👤</span>')+'</div><div class="dc-info"><div class="dc-name">'+c.prenom+' '+c.nom+'</div><div class="dc-role">'+c.role+'</div><ul class="dc-specs">'+spList.slice(0,4).map(function(s){return '<li>'+s.trim()+'</li>';}).join('')+'</ul></div></div>';
+  html+='<div class="dc-div"></div><div><div class="dc-mat">'+c.mat+'</div><div class="dc-lv">Niveau : '+c.level+'</div><div class="dc-co">'+c.country+'</div></div>';
+  var vc=document.getElementById('viewCard');var vw=document.getElementById('cardView');if(vc)vc.innerHTML=html;if(vw){vw.style.display='block';vw.scrollIntoView({behavior:'smooth'});}
+}
+function shareActive(){if(activeCardId)doShare(activeCardId);}
+function doShare(id){
+  var cards=ld('dcards')||[];var c=cards.find(function(x){return x.id===id;});if(!c)return;
+  var txt='🔥 LABO IA & TERMUX ACADEMY\n\n👤 '+c.prenom+' '+c.nom+'\n💼 '+c.role+'\n📋 '+c.mat;
+  if(nativeShare(txt))return;
+  if(navigator.share){navigator.share({title:'Carte Dev',text:txt});}
+  else if(navigator.clipboard){navigator.clipboard.writeText(txt).then(function(){toast('📋 Copié !');});}
+}
+function delCard(id){if(!confirm('Supprimer cette carte ?'))return;sv('dcards',(ld('dcards')||[]).filter(function(c){return c.id!==id;}));renderCards();toast('🗑 Supprimée');}
+
+var edLang='JavaScript';
+var LANGS=[{name:'JavaScript',ext:'js',ex:'console.log("Bonjour LABO IA !");'},{name:'HTML',ext:'html',ex:'<h1>Bonjour !</h1>'},{name:'CSS',ext:'css',ex:'h1{color:#FF6B00;}'},{name:'Python',ext:'py',ex:'print("Bonjour !")'},{name:'INFINI',ext:'inf',ex:"dire 'Bonjour !'"}];
+function initEditor(){
+  var lb=document.getElementById('langBtns');if(lb&&!lb.children.length)lb.innerHTML=LANGS.map(function(l){return '<button class="btn btn-sm '+(l.name===edLang?'btn-o':'btn-gh')+'" onclick="setLang(\''+l.name+'\',this)">'+l.name+'</button>';}).join('');
+  var eb=document.getElementById('exBtns');if(eb&&!eb.children.length)eb.innerHTML=LANGS.map(function(l){return '<button class="btn btn-gh btn-sm" onclick="loadLangEx(\''+l.name+'\')">'+l.name+'</button>';}).join('');
+}
+function setLang(name,btn){edLang=name;document.querySelectorAll('#langBtns button').forEach(function(b){b.className='btn btn-sm btn-gh';});if(btn)btn.className='btn btn-sm btn-o';var l=LANGS.find(function(x){return x.name===name;});if(l){document.getElementById('edExt').textContent=l.ext;document.getElementById('edLang').textContent=l.name;}}
+function loadLangEx(name){var l=LANGS.find(function(x){return x.name===name;});if(l){document.getElementById('codeTA').value=l.ex;setLang(name,null);}}
+function clearEd(){document.getElementById('codeTA').value='';document.getElementById('codeOut').innerHTML='<span style="color:var(--cy)">// Effacé</span>';}
+function runCode(){
+  var code=document.getElementById('codeTA').value.trim();var outEl=document.getElementById('codeOut');
+  if(!code){outEl.innerHTML='<span style="color:var(--mt)">// Rien à exécuter</span>';return;}
+  if(edLang!=='JavaScript'){outEl.innerHTML='<span style="color:var(--gd)">// '+edLang+' simulé ✅</span>';addXP(3);return;}
+  var logs=[];var origLog=console.log;console.log=function(){logs.push(Array.from(arguments).join(' '));};
+  try{(new Function(code))();outEl.innerHTML=logs.length?logs.map(function(l){return '<span style="color:var(--gr)">'+String(l).replace(/</g,'&lt;')+'</span>';}).join('<br>'):'<span style="color:var(--mt)">// Exécuté</span>';}
+  catch(e){outEl.innerHTML='<span style="color:var(--rs)">❌ '+e.message+'</span>';}
+  finally{console.log=origLog;}
+  addXP(3);
+}
+
+var TCMDS=[{c:'pkg update',d:'Mettre à jour',cat:'📦 Paquets'},{c:'pkg install python',d:'Installer Python',cat:'📦 Paquets'},{c:'ls',d:'Lister fichiers',cat:'📁 Navigation'},{c:'pwd',d:'Dossier actuel',cat:'📁 Navigation'},{c:'git init',d:'Initialiser Git',cat:'🔗 Git'}];
+var TRESP={'aide':{o:'Commandes : pkg, ls, pwd, cd, mkdir, git, python3, node, clear',t:'ok'},'ls':{o:'mon_projet/  scripts/  README.md',t:'ok'},'pwd':{o:'/data/data/com.termux/files/home',t:'ok'},'clear':{o:'',t:'ok',clear:true}};
+function initTermux(){
+  var tc=document.getElementById('termCmds');if(!tc)return;
+  tc.innerHTML=TCMDS.map(function(c){return '<div style="display:flex;justify-content:space-between;background:rgba(0,255,136,.03);border:1px solid rgba(0,255,136,.1);border-radius:5px;padding:7px 10px"><span style="font-family:var(--mn);font-size:.7rem;color:var(--gr)">'+c.c+'</span><span style="font-size:.65rem;color:var(--mt)">'+c.d+'</span></div>';}).join('');
+}
+function runTerm(){
+  var inp=document.getElementById('termI');var scr=document.getElementById('termS');if(!inp||!scr)return;
+  var cmd=inp.value.trim();if(!cmd)return;
+  scr.innerHTML+='<div class="tl-row"><span class="tp">$ dev@labo ~ </span><span class="tc">'+cmd+'</span></div>';
+  var k=cmd.toLowerCase();var r=TRESP[k];
+  if(!r){if(k.startsWith('cd ')){r={o:'→ '+cmd.slice(3),t:'ok'};}else if(k.startsWith('mkdir ')){r={o:'✅ Créé',t:'ok'};}else{r={o:'bash: commande introuvable. Tapez "aide".',t:'err'};}}
+  if(r.clear){scr.innerHTML='';}else{scr.innerHTML+='<div class="tl-row"><span class="'+(r.t==='err'?'te':'to')+'">'+r.o+'</span></div>';}
+  scr.scrollTop=scr.scrollHeight;inp.value='';addXP(1);
+}
+
+var ICMDS=[{kw:'dire',d:'Afficher',ex:"dire 'Bonjour !'"},{kw:'stocker',d:'Variable',ex:"stocker nom = 'Abou'"},{kw:'repeter N fois',d:'Boucle',ex:"repeter 3 fois: dire 'Dev !'"}];
+var IEXS=[{n:'Bonjour LABO',c:"dire 'Bonjour LABO IA !'"},{n:'Ma présentation',c:"stocker nom = 'Abou'\ndire 'Je suis ' + nom"}];
+function initInfini(){
+  var el=document.getElementById('infiniCmds');if(el)el.innerHTML=ICMDS.map(function(c){return '<div style="background:rgba(255,215,0,.04);border:1px solid rgba(255,215,0,.14);border-radius:5px;padding:8px 10px"><div style="font-family:var(--mn);font-size:.76rem;color:var(--gd)">'+c.kw+'</div><div style="font-size:.66rem;color:var(--mt)">'+c.d+'</div></div>';}).join('');
+  var exEl=document.getElementById('infiniExs');if(exEl)exEl.innerHTML=IEXS.map(function(e){return '<div style="background:#020810;border:1px solid rgba(255,215,0,.14);border-radius:5px;padding:10px"><span style="font-family:var(--mn);font-size:.68rem;color:var(--gd)">'+e.n+'</span><button class="btn btn-gd btn-sm" style="margin-left:8px" onclick="loadIEx(\''+e.n+'\')">▶</button></div>';}).join('');
+}
+function loadIEx(n){var ex=IEXS.find(function(e){return e.n===n;});if(ex){document.getElementById('ilTA').value=ex.c;runInfini();}}
+function runInfini(){
+  var code=document.getElementById('ilTA').value.trim();var out=document.getElementById('ilOut');if(!code){out.textContent='// Écrivez du code !';return;}
+  var output=[];var vars={};
+  code.split('\n').forEach(function(line){
+    line=line.trim();
+    if(line.startsWith('dire ')){var raw=line.slice(5).replace(/^['"]|['"]$/g,'');output.push('→ '+raw);}
+    else if(line.startsWith('stocker ')){var rest=line.slice(8);var eq=rest.indexOf('=');if(eq>0){vars[rest.slice(0,eq).trim()]=rest.slice(eq+1).trim();output.push('// stocké');}}
+  });
+  out.textContent=output.join('\n')||'// Aucun output';addXP(2);
+}
+
+var QDATA={bases:[{q:'CPU signifie ?',opts:['Central Processing Unit','Power Unit'],a:0,e:'Central Processing Unit !'}],html:[{q:'HTML signifie ?',opts:['HyperText Markup Language','High Text'],a:0,e:'HyperText Markup Language !'}],js:[{q:'const crée ?',opts:['Variable modifiable','Constante'],a:1,e:'Une constante !'}]};
+var QCATS=[{id:'bases',n:'🖥️ Bases'},{id:'html',n:'📄 HTML'},{id:'js',n:'⚡ JS'}];
+var quizActiveCat='bases';var quizState={q:0,score:0,done:false};
+function initQuiz(){var cb=document.getElementById('qCatBtns');if(cb&&!cb.children.length)cb.innerHTML=QCATS.map(function(c){return '<button class="btn btn-sm '+(c.id===quizActiveCat?'btn-o':'btn-gh')+'" onclick="setQuizCat(\''+c.id+'\',this)">'+c.n+'</button>';}).join('');renderQuiz();}
+function setQuizCat(id,btn){quizActiveCat=id;quizState={q:0,score:0,done:false};document.querySelectorAll('#qCatBtns button').forEach(function(b){b.className='btn btn-sm btn-gh';});if(btn)btn.className='btn btn-sm btn-o';renderQuiz();}
+function renderQuiz(){
+  var qs=QDATA[quizActiveCat]||[];var state=quizState;var el=document.getElementById('quizArea');if(!el)return;
+  if(state.done||state.q>=qs.length){var pct=Math.round(state.score/qs.length*100);el.innerHTML='<div class="qb"><div class="qt">✅ Terminé ! Score: '+state.score+'/'+qs.length+'</div><button class="btn btn-o btn-sm" onclick="quizState={q:0,score:0,done:false};renderQuiz()">🔄 Recommencer</button></div>';addXP(state.score*5);checkBadges();return;}
+  var q=qs[state.q];el.innerHTML='<div class="qb"><div class="qt">'+q.q+'</div><div class="qo-list">'+q.opts.map(function(opt,i){return '<button class="qo" onclick="answerGQ('+i+','+q.a+',this)">'+opt+'</button>';}).join('')+'</div></div>';
+}
+function answerGQ(chosen,correct,btn){
+  var btns=btn.parentNode.querySelectorAll('.qo');btns.forEach(function(b){b.disabled=true;});
+  if(chosen===correct){btn.classList.add('ok');quizState.score++;}else{btn.classList.add('nok');btns[correct].classList.add('ok');}
+  setTimeout(function(){quizState.q++;if(quizState.q>=(QDATA[quizActiveCat]||[]).length)quizState.done=true;renderQuiz();},1200);
+}
+
+var voiceOn=false;
+var QSUGGS=['Comment créer un site web ?','Explique les variables JS','Commandes Termux'];
+function initAI(){
+  var qEl=document.getElementById('qQuicks');if(qEl&&!qEl.children.length)qEl.innerHTML=QSUGGS.map(function(q){return '<button class="qq" onclick="askAI(this.textContent)">'+q+'</button>';}).join('');
+  var box=document.getElementById('chatbox');if(box&&!box.children.length)addAIMsg('👋 Salut Dev ! Prof IA LABO IA v7, 100% hors-ligne !');
+}
+function toggleVoice(){voiceOn=!voiceOn;var tog=document.getElementById('spTog');if(tog){tog.textContent='🔊 Voix IA : '+(voiceOn?'ON':'OFF');tog.className='sp-tog'+(voiceOn?' on':'');}}
+function toggleMic(){toast('🎤 Micro nécessite la permission Android RECORD_AUDIO');}
+function speakText(text){if(!voiceOn||!window.speechSynthesis)return;speechSynthesis.cancel();var u=new SpeechSynthesisUtterance(text.replace(/<[^>]+>/g,''));u.lang='fr-FR';speechSynthesis.speak(u);}
+function addAIMsg(text){var box=document.getElementById('chatbox');if(!box)return;var d=document.createElement('div');d.className='msg ai';d.innerHTML='<div class="an">// PROF IA</div>'+text;box.appendChild(d);box.scrollTop=box.scrollHeight;}
+function sendChat(){var v=document.getElementById('chatI').value.trim();if(!v)return;document.getElementById('chatI').value='';askAI(v);}
+var KB=[{k:['html'],r:'📄 HTML structure les pages web avec des balises.'},{k:['css'],r:'🎨 CSS stylise vos pages.'},{k:['javascript','js'],r:'⚡ JavaScript rend vos pages interactives !'},{k:['python'],r:'🐍 Python est idéal pour l\'IA.'},{k:['termux'],r:'📱 Termux transforme votre Android en ordinateur dev.'}];
+function getAIResponse(msg){var q=msg.toLowerCase();for(var i=0;i<KB.length;i++){for(var j=0;j<KB[i].k.length;j++){if(q.includes(KB[i].k[j]))return KB[i].r;}}return '🤔 Bonne question ! Explorez les Classes et le Glossaire.';}
+function askAI(msg){
+  var box=document.getElementById('chatbox');if(!box)return;
+  var ud=document.createElement('div');ud.className='msg user';ud.textContent='> '+msg;box.appendChild(ud);box.scrollTop=box.scrollHeight;
+  setTimeout(function(){var rep=getAIResponse(msg);addAIMsg(rep);speakText(rep);},400);
+}
+
+var snakeGame={canvas:null,ctx:null,grid:15,snake:[],dir:{x:1,y:0},nextDir:{x:1,y:0},food:{x:0,y:0},score:0,hiScore:0,level:1,running:false,paused:false,loop:null,speed:180};
+function initSnake(){
+  var cv=document.getElementById('snakeCanvas');if(!cv)return;snakeGame.canvas=cv;snakeGame.ctx=cv.getContext('2d');
+  snakeGame.hiScore=ld('snake_hi')||0;document.getElementById('snakeHi').textContent=snakeGame.hiScore;
+  document.onkeydown=function(e){var map={'ArrowUp':{x:0,y:-1},'ArrowDown':{x:0,y:1},'ArrowLeft':{x:-1,y:0},'ArrowRight':{x:1,y:0}};if(map[e.key]){e.preventDefault();var d=map[e.key];if(d.x!=-snakeGame.dir.x||d.y!=-snakeGame.dir.y)snakeGame.nextDir=d;}};
+  snakeDraw();
+}
+function snakeDir(x,y){if(!snakeGame.running){snakeStart();return;}if(x!==-snakeGame.dir.x||y!==-snakeGame.dir.y)snakeGame.nextDir={x:x,y:y};}
+function snakeStart(){
+  clearInterval(snakeGame.loop);snakeGame.snake=[{x:7,y:7},{x:6,y:7},{x:5,y:7}];snakeGame.dir={x:1,y:0};snakeGame.nextDir={x:1,y:0};
+  snakeGame.score=0;snakeGame.level=1;snakeGame.speed=180;snakeGame.running=true;snakeGame.paused=false;snakePlaceFood();
+  document.getElementById('snakeScore').textContent='0';document.getElementById('snakeStartBtn').textContent='🔄 Restart';
+  snakeGame.loop=setInterval(snakeTick,snakeGame.speed);
+}
+function snakePause(){if(!snakeGame.running)return;snakeGame.paused=!snakeGame.paused;document.getElementById('snakePauseBtn').textContent=snakeGame.paused?'▶':'⏸';}
+function snakePlaceFood(){var g=snakeGame.grid;var ok=false,f;while(!ok){f={x:Math.floor(Math.random()*g),y:Math.floor(Math.random()*g)};ok=!snakeGame.snake.some(function(s){return s.x===f.x&&s.y===f.y;});}snakeGame.food=f;}
+function snakeTick(){
+  if(!snakeGame.running||snakeGame.paused)return;snakeGame.dir=snakeGame.nextDir;
+  var head={x:snakeGame.snake[0].x+snakeGame.dir.x,y:snakeGame.snake[0].y+snakeGame.dir.y};
+  if(head.x<0||head.x>=snakeGame.grid||head.y<0||head.y>=snakeGame.grid||snakeGame.snake.some(function(s){return s.x===head.x&&s.y===head.y;})){snakeGameOver();return;}
+  snakeGame.snake.unshift(head);
+  if(head.x===snakeGame.food.x&&head.y===snakeGame.food.y){snakeGame.score+=10;document.getElementById('snakeScore').textContent=snakeGame.score;snakePlaceFood();}
+  else{snakeGame.snake.pop();}
+  snakeDraw();
+}
+function snakeGameOver(){
+  snakeGame.running=false;clearInterval(snakeGame.loop);
+  if(snakeGame.score>snakeGame.hiScore){snakeGame.hiScore=snakeGame.score;sv('snake_hi',snakeGame.hiScore);document.getElementById('snakeHi').textContent=snakeGame.hiScore;checkBadges();}
+  document.getElementById('snakeStartBtn').textContent='▶ Rejouer';if(snakeGame.score>0)addXP(Math.floor(snakeGame.score/10));
+}
+function snakeDraw(){
+  var cv=snakeGame.canvas;var ctx=snakeGame.ctx;if(!cv||!ctx)return;var cs=cv.width/snakeGame.grid;
+  ctx.fillStyle='#020810';ctx.fillRect(0,0,cv.width,cv.height);
+  ctx.fillStyle='#FF2060';ctx.beginPath();ctx.arc(snakeGame.food.x*cs+cs/2,snakeGame.food.y*cs+cs/2,cs*.38,0,Math.PI*2);ctx.fill();
+  snakeGame.snake.forEach(function(s,i){ctx.fillStyle=i===0?'#00FF88':'rgba(0,200,100,.6)';ctx.fillRect(s.x*cs+1,s.y*cs+1,cs-2,cs-2);});
+}
+
+var EX_DATA=[{id:'xcp1',cat:'CP',title:'Composants ordinateur',diff:'Débutant',body:'Listez les 4 composants principaux.'},{id:'xce1',cat:'HTML',title:'Première page',diff:'Débutant',body:'Créez une page avec h1 et p.'}];
+var exActiveCat='Tous';
+function initExercices(){var cats=['Tous'];EX_DATA.forEach(function(e){if(!cats.includes(e.cat))cats.push(e.cat);});var catEl=document.getElementById('exCatFilter');if(catEl)catEl.innerHTML=cats.map(function(c){return '<button class="btn btn-sm '+(c===exActiveCat?'btn-o':'btn-gh')+'" onclick="exSetCat(\''+c+'\',this)">'+c+'</button>';}).join('');renderExercices();}
+function exSetCat(cat,el){exActiveCat=cat;document.querySelectorAll('#exCatFilter button').forEach(function(b){b.className='btn btn-sm btn-gh';});if(el)el.className='btn btn-sm btn-o';renderExercices();}
+function filterEx(){renderExercices();}
+function renderExercices(){
+  var q=((document.getElementById('exSearch')||{}).value||'').toLowerCase();var done=ld('ex_done')||[];
+  var list=EX_DATA.filter(function(e){var catOk=exActiveCat==='Tous'||e.cat===exActiveCat;var sOk=!q||e.title.toLowerCase().includes(q);return catOk&&sOk;});
+  var el=document.getElementById('exList');if(!el)return;
+  el.innerHTML=list.map(function(e){var isDone=done.includes(e.id);return '<div class="ex-item'+(isDone?' done':'')+'"><div class="ex-hdr"><span class="ex-cat-tag">'+e.cat+'</span></div><div class="ex-title">'+e.title+'</div><div class="ex-body">'+e.body+'</div><button class="btn '+(isDone?'btn-gh':'btn-gr')+' btn-sm" onclick="toggleExDone(\''+e.id+'\',this)">'+(isDone?'↺ Refaire':'✅ Terminé')+'</button></div>';}).join('');
+}
+function toggleExDone(id,btn){var done=ld('ex_done')||[];if(done.includes(id)){done=done.filter(function(x){return x!==id;});}else{done.push(id);addXP(5);}sv('ex_done',done);renderExercices();checkBadges();}
+
+function renderStats(){
+  var xp=ld('xp')||0,cdone=ld('cdone')||[],exdone=ld('ex_done')||[],earned=ld('badges')||[];
+  var grid=document.getElementById('statsGrid');
+  if(grid)grid.innerHTML=[{ico:'⚡',v:xp,lbl:'XP Total'},{ico:'📚',v:cdone.length,lbl:'Classes'},{ico:'🏋️',v:exdone.length,lbl:'Exercices'},{ico:'🏅',v:earned.length,lbl:'Badges'}].map(function(s){return '<div class="sc"><span class="si">'+s.ico+'</span><strong>'+s.v+'</strong><small>'+s.lbl+'</small></div>';}).join('');
+  var ab=document.getElementById('allBadges');
+  if(ab)ab.innerHTML=BADGES.map(function(b){var got=earned.includes(b.id);return '<div style="text-align:center;padding:8px;background:'+(got?'rgba(255,215,0,.06)':'rgba(255,255,255,.02)')+';border-radius:7px;min-width:60px;opacity:'+(got?'1':'.3')+'"><div style="font-size:1.4rem">'+b.ico+'</div><div style="font-size:.54rem;font-family:var(--mn)">'+b.title+'</div></div>';}).join('');
+}
+
+function saveNote(){
+  var title=document.getElementById('noteTitleI').value.trim();var body=document.getElementById('noteBodyI').value.trim();
+  if(!title&&!body){toast('⚠️ Écrivez quelque chose !');return;}
+  var notes=ld('notes')||[];notes.unshift({id:'n'+Date.now(),title:title||'Sans titre',body:body,date:new Date().toLocaleDateString('fr-FR')});
+  sv('notes',notes);document.getElementById('noteTitleI').value='';document.getElementById('noteBodyI').value='';toast('💾 Sauvegardée !');renderNotes();checkBadges();
+}
+function cancelNote(){document.getElementById('noteTitleI').value='';document.getElementById('noteBodyI').value='';}
+function renderNotes(){
+  var notes=ld('notes')||[];var el=document.getElementById('notesList');if(!el)return;
+  if(!notes.length){el.innerHTML='<div style="text-align:center;padding:28px;color:var(--mt);font-family:var(--mn)">// Aucune note.</div>';return;}
+  el.innerHTML=notes.map(function(n){return '<div class="note-item"><div class="note-title">'+n.title+'</div><div class="note-prev">'+n.body+'</div><div class="note-date">'+n.date+'</div></div>';}).join('');
+}
+
+var GLOSSAIRE=[{kw:'HTML',def:'Langage de balisage pour pages web.'},{kw:'CSS',def:'Langage de mise en forme.'},{kw:'JavaScript',def:'Langage rendant les pages interactives.'},{kw:'API',def:'Interface de communication entre logiciels.'},{kw:'Git',def:'Système de gestion de versions.'}];
+function initGlossaire(){
+  var gl=document.getElementById('gloList');if(gl)gl.innerHTML=GLOSSAIRE.map(function(g){return '<div class="box"><div class="box-t">'+g.kw+'</div><div style="font-size:.78rem;color:var(--mt)">'+g.def+'</div></div>';}).join('');
+}
+function filterGlo(){
+  var q=(document.getElementById('gloSearch').value||'').toLowerCase();
+  var gl=document.getElementById('gloList');if(!gl)return;
+  gl.innerHTML=GLOSSAIRE.filter(function(g){return g.kw.toLowerCase().includes(q)||g.def.toLowerCase().includes(q);}).map(function(g){return '<div class="box"><div class="box-t">'+g.kw+'</div><div style="font-size:.78rem;color:var(--mt)">'+g.def+'</div></div>';}).join('');
+}
+</script>
+</body>
+</html>

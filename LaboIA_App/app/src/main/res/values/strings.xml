@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">LABO IA Academy</string>
+    <string name="app_description">La plateforme des développeurs africains</string>
+    <string name="loading">Chargement en cours…</string>
+    <string name="version">v7.0</string>
+</resources>
