@@ -1,0 +1,17 @@
+services:
+  - type: worker
+    name: termchat-server
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py & python ws_bridge.py
+    envVars:
+      - key: PORT
+        value: 9999
+      - key: WS_PORT
+        value: 8765
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_REPO
+        value: daboujohan-hub/termchat
+      - key: ADMIN_CODE
+        sync: false
