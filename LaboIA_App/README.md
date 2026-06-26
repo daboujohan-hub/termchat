@@ -1,1 +1,0 @@
-# LaboIA & Termux Academy
