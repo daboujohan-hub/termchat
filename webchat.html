@@ -1,0 +1,1433 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TermChat v6 — Aboudev Labs CI</title>
+<style>
+  :root {
+    --bg:       #0e1117;
+    --surface:  #161b22;
+    --card:     #1c2230;
+    --border:   #2a3344;
+    --accent:   #00d4aa;
+    --accent2:  #0099ff;
+    --danger:   #ff4757;
+    --warn:     #ffa502;
+    --text:     #e6edf3;
+    --muted:    #8b949e;
+    --bubble-me:#0d4f3c;
+    --bubble-them:#1c2230;
+    --radius:   14px;
+    --font:     'Segoe UI', system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* ── ÉCRANS ── */
+  .screen { display: none; flex-direction: column; height: 100dvh; }
+  .screen.active { display: flex; }
+
+  /* ── AUTH ── */
+  #auth-screen { align-items: center; justify-content: center; padding: 24px; background: radial-gradient(ellipse at 50% 0%, #0d2a22 0%, var(--bg) 60%); }
+  .auth-logo { font-size: 48px; margin-bottom: 8px; }
+  .auth-title { font-size: 28px; font-weight: 700; color: var(--accent); letter-spacing: -0.5px; }
+  .auth-sub { color: var(--muted); font-size: 14px; margin-bottom: 32px; }
+  .auth-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 28px; width: 100%; max-width: 380px; }
+  .auth-tabs { display: flex; gap: 8px; margin-bottom: 24px; }
+  .auth-tab { flex: 1; padding: 10px; border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 8px; cursor: pointer; font-size: 14px; transition: all .2s; }
+  .auth-tab.active { background: var(--accent); color: #000; font-weight: 600; border-color: var(--accent); }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; font-weight: 600; letter-spacing: .5px; }
+  .field input, .field select { width: 100%; background: var(--card); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 11px 14px; font-size: 14px; outline: none; transition: border .2s; }
+  .field input:focus, .field select:focus { border-color: var(--accent); }
+  .btn { width: 100%; padding: 12px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: all .2s; }
+  .btn-primary { background: var(--accent); color: #000; }
+  .btn-primary:hover { background: #00ffcc; }
+  .btn-danger { background: var(--danger); color: #fff; }
+  .btn-sm { padding: 8px 16px; font-size: 13px; width: auto; border-radius: 8px; border: none; cursor: pointer; font-weight: 600; }
+  .msg-auth { margin-top: 12px; font-size: 13px; text-align: center; min-height: 18px; }
+  .msg-auth.ok { color: var(--accent); }
+  .msg-auth.err { color: var(--danger); }
+
+  /* ── APP ── */
+  #app-screen { flex-direction: row; }
+
+  /* ── SIDEBAR ── */
+  .sidebar { width: 320px; min-width: 280px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+  .sidebar-header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
+  .my-avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--accent); color: #000; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 18px; cursor: pointer; flex-shrink: 0; }
+  .my-info { flex: 1; min-width: 0; }
+  .my-name { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .my-number { font-size: 11px; color: var(--muted); }
+  .header-actions { display: flex; gap: 6px; }
+  .icon-btn { background: transparent; border: none; color: var(--muted); cursor: pointer; padding: 7px; border-radius: 8px; font-size: 18px; transition: all .2s; display: flex; align-items: center; justify-content: center; }
+  .icon-btn:hover { background: var(--card); color: var(--text); }
+
+  /* ONGLETS SIDEBAR */
+  .sidebar-tabs { display: flex; border-bottom: 1px solid var(--border); }
+  .stab { flex: 1; padding: 12px 4px; background: transparent; border: none; color: var(--muted); font-size: 12px; cursor: pointer; border-bottom: 2px solid transparent; transition: all .2s; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+  .stab span.ico { font-size: 18px; }
+  .stab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* RECHERCHE */
+  .search-bar { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .search-bar input { width: 100%; background: var(--card); border: 1px solid var(--border); color: var(--text); border-radius: 20px; padding: 8px 14px; font-size: 13px; outline: none; }
+
+  /* LISTES */
+  .list-panel { flex: 1; overflow-y: auto; }
+  .list-panel::-webkit-scrollbar { width: 4px; }
+  .list-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  .conv-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; cursor: pointer; border-bottom: 1px solid #1a2030; transition: background .15s; position: relative; }
+  .conv-item:hover, .conv-item.active { background: var(--card); }
+  .conv-avatar { width: 42px; height: 42px; border-radius: 50%; background: var(--accent2); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 17px; flex-shrink: 0; position: relative; }
+  .online-dot { position: absolute; bottom: 1px; right: 1px; width: 11px; height: 11px; border-radius: 50%; background: #2ecc71; border: 2px solid var(--surface); }
+  .conv-info { flex: 1; min-width: 0; }
+  .conv-name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conv-last { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+  .conv-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
+  .conv-time { font-size: 11px; color: var(--muted); }
+  .badge { background: var(--accent); color: #000; border-radius: 12px; padding: 2px 7px; font-size: 11px; font-weight: 700; }
+  .empty-list { padding: 40px 20px; text-align: center; color: var(--muted); font-size: 14px; }
+  .empty-list .ico { font-size: 40px; margin-bottom: 12px; }
+
+  /* ── ZONE CHAT ── */
+  .chat-area { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .chat-placeholder { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--muted); gap: 12px; }
+  .chat-placeholder .ico { font-size: 64px; opacity: .3; }
+
+  /* ENTÊTE CHAT */
+  .chat-header { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; background: var(--surface); flex-shrink: 0; }
+  .chat-header .back-btn { display: none; background: none; border: none; color: var(--muted); font-size: 22px; cursor: pointer; padding: 4px; }
+  .chat-header-info { flex: 1; min-width: 0; cursor: pointer; }
+  .chat-header-name { font-weight: 600; font-size: 15px; }
+  .chat-header-status { font-size: 12px; color: var(--accent); }
+  .chat-header-actions { display: flex; gap: 4px; }
+
+  /* MESSAGES */
+  .messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 6px; }
+  .messages::-webkit-scrollbar { width: 4px; }
+  .messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  .msg-row { display: flex; flex-direction: column; max-width: 72%; }
+  .msg-row.mine { align-self: flex-end; align-items: flex-end; }
+  .msg-row.theirs { align-self: flex-start; align-items: flex-start; }
+  .msg-bubble { padding: 9px 14px; border-radius: 16px; font-size: 14px; line-height: 1.5; position: relative; word-break: break-word; }
+  .msg-row.mine .msg-bubble { background: var(--bubble-me); border-bottom-right-radius: 4px; }
+  .msg-row.theirs .msg-bubble { background: var(--bubble-them); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+  .msg-meta { font-size: 11px; color: var(--muted); margin-top: 3px; display: flex; align-items: center; gap: 5px; }
+  .msg-row.mine .msg-meta { justify-content: flex-end; }
+  .msg-sender { font-size: 12px; color: var(--accent2); font-weight: 600; margin-bottom: 3px; }
+  .msg-reply { background: rgba(255,255,255,.05); border-left: 3px solid var(--accent); padding: 5px 10px; border-radius: 6px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .msg-modified { font-size: 10px; color: var(--muted); font-style: italic; }
+  .msg-deleted { color: var(--muted); font-style: italic; }
+  .msg-actions { display: none; position: absolute; right: 0; top: -30px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 4px; display: none; gap: 4px; z-index: 10; }
+  .msg-bubble:hover .msg-actions { display: flex; }
+  .msg-action-btn { background: none; border: none; cursor: pointer; font-size: 14px; padding: 4px 6px; border-radius: 4px; color: var(--muted); }
+  .msg-action-btn:hover { background: var(--border); color: var(--text); }
+  .typing-indicator { font-size: 12px; color: var(--accent); padding: 4px 0; min-height: 20px; }
+  .system-msg { text-align: center; font-size: 12px; color: var(--muted); padding: 8px; }
+  .date-divider { text-align: center; font-size: 11px; color: var(--muted); padding: 12px; position: relative; }
+  .date-divider::before, .date-divider::after { content: ''; position: absolute; top: 50%; width: 30%; height: 1px; background: var(--border); }
+  .date-divider::before { left: 8px; }
+  .date-divider::after { right: 8px; }
+
+  /* SAISIE */
+  .chat-input-area { padding: 12px 16px; border-top: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
+  .reply-preview { background: var(--card); border-left: 3px solid var(--accent); padding: 6px 10px; border-radius: 6px; font-size: 12px; color: var(--muted); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+  .reply-preview button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 16px; }
+  .input-row { display: flex; align-items: flex-end; gap: 8px; }
+  .msg-input { flex: 1; background: var(--card); border: 1px solid var(--border); color: var(--text); border-radius: 22px; padding: 10px 16px; font-size: 14px; outline: none; resize: none; max-height: 120px; line-height: 1.4; font-family: var(--font); transition: border .2s; }
+  .msg-input:focus { border-color: var(--accent); }
+  .send-btn { width: 42px; height: 42px; border-radius: 50%; background: var(--accent); border: none; color: #000; font-size: 18px; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: all .2s; }
+  .send-btn:hover { background: #00ffcc; transform: scale(1.05); }
+
+  /* ── MODALS ── */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: none; align-items: center; justify-content: center; z-index: 100; padding: 16px; backdrop-filter: blur(4px); }
+  .modal-overlay.open { display: flex; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; width: 100%; max-width: 420px; max-height: 90dvh; overflow-y: auto; }
+  .modal h3 { font-size: 18px; font-weight: 700; margin-bottom: 20px; }
+  .modal-close { float: right; background: none; border: none; color: var(--muted); font-size: 22px; cursor: pointer; margin-top: -4px; }
+  .modal-footer { display: flex; gap: 10px; margin-top: 20px; }
+  .modal-footer .btn { flex: 1; }
+
+  /* TOAST */
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px); background: var(--card); border: 1px solid var(--border); color: var(--text); padding: 12px 20px; border-radius: 24px; font-size: 14px; z-index: 200; transition: transform .3s; white-space: nowrap; }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+  .toast.ok { border-color: var(--accent); color: var(--accent); }
+  .toast.err { border-color: var(--danger); color: var(--danger); }
+
+  /* PROFIL */
+  .profil-header { text-align: center; padding: 20px 0; }
+  .profil-avatar { width: 72px; height: 72px; border-radius: 50%; background: var(--accent2); color: #fff; font-size: 32px; font-weight: 700; display: flex; align-items: center; justify-content: center; margin: 0 auto 12px; }
+  .profil-name { font-size: 20px; font-weight: 700; }
+  .profil-number { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .profil-bio { font-size: 14px; color: var(--muted); margin-top: 8px; font-style: italic; }
+  .info-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+  .info-row:last-child { border-bottom: none; }
+  .info-label { color: var(--muted); }
+
+  /* STATUT BADGE */
+  .statut-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 3px 8px; border-radius: 12px; }
+  .statut-disponible { background: #0d2a1a; color: #2ecc71; }
+  .statut-occupe { background: #2a2000; color: var(--warn); }
+  .statut-ne_pas_deranger { background: #2a0000; color: var(--danger); }
+  .statut-absent { background: #1a1a1a; color: var(--muted); }
+
+  /* ADMIN */
+  .stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 20px; }
+  .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px; text-align: center; }
+  .stat-value { font-size: 24px; font-weight: 700; color: var(--accent); }
+  .stat-label { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .user-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .user-row:last-child { border-bottom: none; }
+  .user-actions { display: flex; gap: 6px; margin-left: auto; }
+
+  /* MOBILE */
+  @media (max-width: 700px) {
+    .sidebar { width: 100%; position: absolute; inset: 0; z-index: 10; transition: transform .25s; }
+    .sidebar.hidden { transform: translateX(-100%); }
+    .chat-area { position: absolute; inset: 0; }
+    .chat-header .back-btn { display: flex; }
+    #app-screen { position: relative; overflow: hidden; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════ AUTH ═══════════════════════ -->
+<div id="auth-screen" class="screen active">
+  <div class="auth-logo">💬</div>
+  <div class="auth-title">TermChat</div>
+  <div class="auth-sub">by Aboudev Labs 🇨🇮</div>
+  <div class="auth-box">
+    <div class="auth-tabs">
+      <button class="auth-tab active" onclick="switchTab('login')">Connexion</button>
+      <button class="auth-tab" onclick="switchTab('register')">Inscription</button>
+    </div>
+    <!-- LOGIN -->
+    <div id="tab-login">
+      <div class="field"><label>NOM D'UTILISATEUR</label><input id="l-nom" placeholder="Votre nom" /></div>
+      <div class="field"><label>MOT DE PASSE</label><input id="l-mdp" type="password" placeholder="••••••" /></div>
+      <div class="field" id="login-numero-field" style="display:none">
+        <label>NUMÉRO (si plusieurs comptes)</label><input id="l-numero" placeholder="+225..." />
+      </div>
+      <button class="btn btn-primary" onclick="connecter()">Se connecter</button>
+    </div>
+    <!-- REGISTER -->
+    <div id="tab-register" style="display:none">
+      <div class="field"><label>NOM D'UTILISATEUR</label><input id="r-nom" placeholder="2 à 20 caractères" /></div>
+      <div class="field"><label>MOT DE PASSE</label><input id="r-mdp" type="password" placeholder="Minimum 4 caractères" /></div>
+      <div class="field"><label>PAYS</label>
+        <select id="r-pays">
+          <option value="+225">🇨🇮 Côte d'Ivoire</option>
+          <option value="+221">🇸🇳 Sénégal</option>
+          <option value="+224">🇬🇳 Guinée</option>
+          <option value="+226">🇧🇫 Burkina Faso</option>
+          <option value="+233">🇬🇭 Ghana</option>
+        </select>
+      </div>
+      <div class="field"><label>COULEUR</label>
+        <select id="r-couleur">
+          <option value="cyan">🩵 Cyan</option>
+          <option value="vert">💚 Vert</option>
+          <option value="jaune">💛 Jaune</option>
+          <option value="magenta">💜 Magenta</option>
+          <option value="bleu">💙 Bleu</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" onclick="inscrire()">Créer mon compte</button>
+    </div>
+    <div class="msg-auth" id="auth-msg"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════ APP ═══════════════════════ -->
+<div id="app-screen" class="screen">
+  <!-- SIDEBAR -->
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="my-avatar" id="my-avatar" onclick="ouvrirProfil()">?</div>
+      <div class="my-info">
+        <div class="my-name" id="my-name">—</div>
+        <div class="my-number" id="my-number">—</div>
+      </div>
+      <div class="header-actions">
+        <button class="icon-btn" title="Nouveau chat" onclick="ouvrirRecherche()">✏️</button>
+        <button class="icon-btn" title="Admin" onclick="ouvrirAdmin()" id="btn-admin" style="display:none">⚙️</button>
+        <button class="icon-btn" title="Se déconnecter" onclick="seDeconnecter()">🚪</button>
+      </div>
+    </div>
+    <div class="sidebar-tabs">
+      <button class="stab active" onclick="changerOnglet('convs')" id="stab-convs"><span class="ico">💬</span>Chats</button>
+      <button class="stab" onclick="changerOnglet('online')" id="stab-online"><span class="ico">🟢</span>En ligne</button>
+      <button class="stab" onclick="changerOnglet('groupes')" id="stab-groupes"><span class="ico">👥</span>Groupes</button>
+      <button class="stab" onclick="changerOnglet('canaux')" id="stab-canaux"><span class="ico">📢</span>Canaux</button>
+    </div>
+    <div class="search-bar"><input id="search-input" placeholder="🔍 Rechercher…" oninput="filtrerListe()" /></div>
+    <div class="list-panel" id="list-panel"></div>
+  </div>
+
+  <!-- CHAT -->
+  <div class="chat-area" id="chat-area">
+    <div class="chat-placeholder" id="chat-placeholder">
+      <div class="ico">💬</div>
+      <div>Sélectionne une conversation</div>
+      <div style="font-size:13px;color:var(--muted)">ou clique sur ✏️ pour chercher quelqu'un</div>
+    </div>
+    <div id="chat-main" style="display:none;flex-direction:column;height:100%">
+      <div class="chat-header">
+        <button class="back-btn" onclick="retourSidebar()">←</button>
+        <div class="conv-avatar" id="chat-avatar" style="width:38px;height:38px;font-size:16px">?</div>
+        <div class="chat-header-info" onclick="voirProfilContact()">
+          <div class="chat-header-name" id="chat-name">—</div>
+          <div class="chat-header-status" id="chat-status">—</div>
+        </div>
+        <div class="chat-header-actions">
+          <button class="icon-btn" title="Rechercher dans les messages" onclick="ouvrirRechercheMsg()">🔍</button>
+          <button class="icon-btn" title="Effacer l'historique" onclick="effacerHistorique()">🗑️</button>
+        </div>
+      </div>
+      <div class="messages" id="messages"></div>
+      <div class="typing-indicator" id="typing-indicator" style="padding:4px 16px"></div>
+      <div class="chat-input-area">
+        <div class="reply-preview" id="reply-preview" style="display:none">
+          <span id="reply-text">—</span>
+          <button onclick="annulerReply()">✕</button>
+        </div>
+        <div class="input-row">
+          <textarea class="msg-input" id="msg-input" rows="1" placeholder="Message…"
+            onkeydown="handleKey(event)" oninput="handleTyping()"></textarea>
+          <button class="send-btn" onclick="envoyerMessage()">➤</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════ MODALS ═══════════════════════ -->
+
+<!-- Recherche contact -->
+<div class="modal-overlay" id="modal-recherche">
+  <div class="modal">
+    <button class="modal-close" onclick="fermerModal('modal-recherche')">✕</button>
+    <h3>🔍 Chercher un contact</h3>
+    <div class="field"><label>NUMÉRO</label><input id="search-numero" placeholder="+225..." oninput="rechercherContact()" /></div>
+    <div id="search-result"></div>
+  </div>
+</div>
+
+<!-- Profil perso -->
+<div class="modal-overlay" id="modal-profil">
+  <div class="modal">
+    <button class="modal-close" onclick="fermerModal('modal-profil')">✕</button>
+    <h3>Mon profil</h3>
+    <div class="profil-header">
+      <div class="profil-avatar" id="profil-avatar-big">?</div>
+      <div class="profil-name" id="profil-name-big">—</div>
+      <div class="profil-number" id="profil-number-big">—</div>
+      <div class="profil-bio" id="profil-bio-big">—</div>
+    </div>
+    <div class="field"><label>EMOJI AVATAR</label><input id="p-avatar" placeholder="Ex: 😎 ou AB" maxlength="2" /></div>
+    <div class="field"><label>BIO</label><input id="p-bio" placeholder="Décris-toi en quelques mots…" maxlength="150" /></div>
+    <div class="field"><label>STATUT</label>
+      <select id="p-statut">
+        <option value="disponible">🟢 Disponible</option>
+        <option value="occupe">🟡 Occupé</option>
+        <option value="ne_pas_deranger">🔴 Ne pas déranger</option>
+        <option value="absent">⚫ Absent</option>
+      </select>
+    </div>
+    <div class="field"><label>COULEUR</label>
+      <select id="p-couleur">
+        <option value="cyan">🩵 Cyan</option>
+        <option value="vert">💚 Vert</option>
+        <option value="jaune">💛 Jaune</option>
+        <option value="magenta">💜 Magenta</option>
+        <option value="bleu">💙 Bleu</option>
+      </select>
+    </div>
+    <button class="btn btn-primary" onclick="sauverProfil()" style="margin-bottom:10px">💾 Sauvegarder</button>
+    <hr style="border-color:var(--border);margin:16px 0">
+    <h3 style="font-size:15px;margin-bottom:12px">🔒 Changer le mot de passe</h3>
+    <div class="field"><label>ANCIEN</label><input id="p-ancien-mdp" type="password" placeholder="••••" /></div>
+    <div class="field"><label>NOUVEAU</label><input id="p-nouveau-mdp" type="password" placeholder="••••" /></div>
+    <button class="btn btn-primary" onclick="changerMdp()">🔑 Changer</button>
+    <hr style="border-color:var(--border);margin:16px 0">
+    <h3 style="font-size:15px;margin-bottom:12px">📌 Code PIN</h3>
+    <div class="field"><input id="p-pin" placeholder="4 chiffres" maxlength="4" type="password" /></div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" onclick="definirPin()">Activer PIN</button>
+      <button class="btn" style="background:var(--border);color:var(--text)" onclick="supprimerPin()">Désactiver</button>
+    </div>
+  </div>
+</div>
+
+<!-- Profil contact -->
+<div class="modal-overlay" id="modal-contact">
+  <div class="modal">
+    <button class="modal-close" onclick="fermerModal('modal-contact')">✕</button>
+    <div class="profil-header">
+      <div class="profil-avatar" id="contact-avatar">?</div>
+      <div class="profil-name" id="contact-name">—</div>
+      <div class="profil-number" id="contact-number">—</div>
+      <div class="profil-bio" id="contact-bio">—</div>
+    </div>
+    <div class="info-row"><span class="info-label">Pays</span><span id="contact-pays">—</span></div>
+    <div class="info-row"><span class="info-label">Statut</span><span id="contact-statut">—</span></div>
+    <div class="info-row"><span class="info-label">En ligne</span><span id="contact-enligne">—</span></div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" onclick="ouvrirChatDepuisContact()">💬 Envoyer un message</button>
+      <button class="btn" style="background:var(--border)" onclick="bloquerContact()">🚫 Bloquer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Groupe modal -->
+<div class="modal-overlay" id="modal-groupe">
+  <div class="modal">
+    <button class="modal-close" onclick="fermerModal('modal-groupe')">✕</button>
+    <h3 id="modal-groupe-titre">👥 Groupe</h3>
+    <div id="modal-groupe-contenu"></div>
+  </div>
+</div>
+
+<!-- Canal modal -->
+<div class="modal-overlay" id="modal-canal">
+  <div class="modal">
+    <button class="modal-close" onclick="fermerModal('modal-canal')">✕</button>
+    <h3 id="modal-canal-titre">📢 Canal</h3>
+    <div id="modal-canal-contenu"></div>
+  </div>
+</div>
+
+<!-- Admin -->
+<div class="modal-overlay" id="modal-admin">
+  <div class="modal" style="max-width:500px">
+    <button class="modal-close" onclick="fermerModal('modal-admin')">✕</button>
+    <h3>⚙️ Panel Admin</h3>
+    <div class="stat-grid" id="admin-stats"></div>
+    <div class="field">
+      <label>ANNONCE À TOUS</label>
+      <input id="admin-broadcast-msg" placeholder="Votre message…" />
+    </div>
+    <button class="btn btn-primary" onclick="adminBroadcast()" style="margin-bottom:16px">📢 Envoyer à tous</button>
+    <h3 style="font-size:15px;margin-bottom:12px">👥 Utilisateurs connectés</h3>
+    <div id="admin-users-list"></div>
+  </div>
+</div>
+
+<!-- Recherche dans messages -->
+<div class="modal-overlay" id="modal-search-msg">
+  <div class="modal">
+    <button class="modal-close" onclick="fermerModal('modal-search-msg')">✕</button>
+    <h3>🔍 Rechercher dans les messages</h3>
+    <div class="field"><input id="search-msg-input" placeholder="Mot clé…" oninput="rechercherDansMessages()" /></div>
+    <div id="search-msg-results"></div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// CONFIG & ÉTAT
+// ═══════════════════════════════════════════════════════
+const HOST = location.hostname || 'localhost';
+const WS_URL = `ws://${HOST}:8765`;
+
+let ws = null;
+let session = { connecte: false, nom: null, numero: null, est_admin: false };
+let chatActif = null;    // { numero, nom, type: 'prive'|'groupe'|'canal', id }
+let replyTo = null;
+let typingTimer = null;
+let ongletActif = 'convs';
+let contactVu = null;   // pour modal contact
+
+// Données locales
+let conversations = [];
+let enLigne = [];
+let mesGroupes = [];
+let canaux = [];
+
+// ═══════════════════════════════════════════════════════
+// WEBSOCKET
+// ═══════════════════════════════════════════════════════
+function connecterWS(callback) {
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => { if (callback) callback(); };
+  ws.onmessage = (e) => {
+    try { traiterMessage(JSON.parse(e.data)); } catch(err) {}
+  };
+  ws.onclose = () => {
+    if (session.connecte) {
+      setTimeout(() => connecterWS(), 3000);
+      toast('Reconnexion en cours…', '');
+    }
+  };
+  ws.onerror = () => {};
+}
+
+function envoyer(obj) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+}
+
+// ═══════════════════════════════════════════════════════
+// TRAITEMENT MESSAGES SERVEUR
+// ═══════════════════════════════════════════════════════
+function traiterMessage(p) {
+  // Message entrant
+  if (p.type === 'message') {
+    const estActif = chatActif && chatActif.type === 'prive' && chatActif.numero === p.numero;
+    ajouterBulleMessage({ de: p.numero, nom_de: p.de, texte: p.texte, heure: p.heure,
+      chiffre: p.chiffre, reply_to: p.reply_to, msg_id: p.msg_id }, estActif ? 'theirs' : null);
+    if (!estActif) {
+      toast(`💬 ${p.de}: ${p.texte.substring(0,40)}`, 'ok');
+      chargerConversations();
+    } else {
+      envoyer({ action: 'marquer_lu', avec: p.numero });
+    }
+  }
+  // Livre / lu
+  else if (p.type === 'livre') { majStatutMessage(p.msg_id, '✓✓'); }
+  else if (p.type === 'lu') { majTousLus(p.par); }
+  // Typing
+  else if (p.type === 'typing') {
+    if (chatActif && chatActif.numero === p.numero) {
+      document.getElementById('typing-indicator').textContent =
+        p.actif ? `✍️ ${p.de} est en train d'écrire…` : '';
+    }
+  }
+  // Statut en ligne
+  else if (p.type === 'statut') {
+    if (chatActif && chatActif.numero === p.numero) {
+      document.getElementById('chat-status').textContent =
+        p.en_ligne ? '🟢 En ligne' : '⚫ Hors ligne';
+    }
+    chargerEnLigne();
+  }
+  // Statut changé
+  else if (p.type === 'statut_change') { chargerEnLigne(); }
+  // Msg modifié
+  else if (p.type === 'msg_modifie') {
+    const el = document.querySelector(`[data-id="${p.msg_id}"] .msg-text`);
+    if (el) { el.textContent = p.texte; }
+    const mod = document.querySelector(`[data-id="${p.msg_id}"] .msg-modified`);
+    if (mod) mod.style.display = 'inline';
+  }
+  // Msg supprimé
+  else if (p.type === 'msg_supprime') {
+    const el = document.querySelector(`[data-id="${p.msg_id}"] .msg-text`);
+    if (el) { el.innerHTML = '<em class="msg-deleted">Message supprimé</em>'; }
+  }
+  // Réaction
+  else if (p.type === 'reaction') {
+    const el = document.querySelector(`[data-id="${p.msg_id}"] .msg-reactions`);
+    if (el) { el.textContent += p.emoji; }
+  }
+  // Groupe
+  else if (p.type === 'msg_groupe') {
+    if (chatActif && chatActif.type === 'groupe' && chatActif.id === p.id_groupe) {
+      ajouterBulleMessage({ de: p.numero, nom_de: p.de, texte: p.texte,
+        heure: p.heure, reply_to: p.reply_to }, 'theirs');
+    } else {
+      toast(`👥 ${p.groupe} — ${p.de}: ${p.texte.substring(0,30)}`, 'ok');
+    }
+  }
+  else if (p.type === 'invitation_groupe') {
+    toast(`👥 Tu as été ajouté au groupe "${p.groupe}"`, 'ok');
+    chargerGroupes();
+  }
+  else if (p.type === 'groupe_renomme') {
+    toast(`✏️ Groupe renommé: ${p.nom}`, '');
+    chargerGroupes();
+  }
+  else if (p.type === 'membre_quitte') {
+    toast(`${p.nom} a quitté le groupe "${p.groupe}"`, '');
+  }
+  // Canal
+  else if (p.type === 'msg_canal') {
+    if (chatActif && chatActif.type === 'canal' && chatActif.id === p.id_canal) {
+      ajouterBulleMessage({ de: p.numero, nom_de: p.de, texte: p.texte, heure: p.heure }, 'theirs');
+    } else {
+      toast(`📢 ${p.canal} — ${p.de}: ${p.texte.substring(0,30)}`, 'ok');
+    }
+  }
+  // Annonce admin
+  else if (p.type === 'annonce') {
+    ajouterSystemeMsg(`📢 Annonce: ${p.msg}`);
+    toast(`📢 ${p.msg}`, '');
+  }
+  // Kick
+  else if (p.type === 'kick') {
+    toast(p.msg, 'err');
+    setTimeout(() => { seDeconnecter(); }, 1500);
+  }
+  // Timeout
+  else if (p.type === 'timeout') {
+    toast('Session expirée. Reconnexion…', 'err');
+    seDeconnecter();
+  }
+  // Fichier
+  else if (p.type === 'fichier') {
+    if (chatActif && chatActif.numero === p.numero) {
+      ajouterBulleMessage({ de: p.numero, nom_de: p.de,
+        texte: `📎 ${p.nom_fichier}`, type: 'fichier',
+        contenu: p.contenu, nom_fichier: p.nom_fichier, heure: p.heure }, 'theirs');
+    }
+  }
+  // Vocal
+  else if (p.type === 'vocal') {
+    if (chatActif && chatActif.numero === p.numero) {
+      ajouterBulleMessage({ de: p.numero, nom_de: p.de,
+        texte: `🎤 Message vocal (${p.duree}s)`, type: 'vocal', heure: p.heure }, 'theirs');
+    }
+  }
+  // Épinglé
+  else if (p.type === 'epingle') {
+    toast(`📌 ${p.groupe}: ${p.texte}`, '');
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// AUTH
+// ═══════════════════════════════════════════════════════
+function switchTab(tab) {
+  document.getElementById('tab-login').style.display  = tab==='login' ? 'block':'none';
+  document.getElementById('tab-register').style.display = tab==='register' ? 'block':'none';
+  document.querySelectorAll('.auth-tab').forEach((t,i)=>{
+    t.classList.toggle('active', (i===0 && tab==='login')||(i===1 && tab==='register'));
+  });
+  document.getElementById('auth-msg').textContent = '';
+}
+
+function msgAuth(msg, ok) {
+  const el = document.getElementById('auth-msg');
+  el.textContent = msg;
+  el.className = 'msg-auth ' + (ok ? 'ok' : 'err');
+}
+
+function inscrire() {
+  const nom = document.getElementById('r-nom').value.trim();
+  const mdp = document.getElementById('r-mdp').value.trim();
+  const prefixe = document.getElementById('r-pays').value;
+  const couleur = document.getElementById('r-couleur').value;
+  connecterWS(() => {
+    ws.onmessage = (e) => {
+      const p = JSON.parse(e.data);
+      if (p.ok) { msgAuth(`✅ Compte créé! Ton numéro: ${p.numero}`, true); switchTab('login'); }
+      else { msgAuth(p.msg, false); }
+      ws.onmessage = (ev) => { try { traiterMessage(JSON.parse(ev.data)); } catch(err){} };
+    };
+    envoyer({ action: 'inscrire', nom, mdp, prefixe, couleur });
+  });
+}
+
+function connecter() {
+  const nom    = document.getElementById('l-nom').value.trim();
+  const mdp    = document.getElementById('l-mdp').value.trim();
+  const numero = document.getElementById('l-numero').value.trim();
+  const action = numero ? 'connecter_numero' : 'connecter';
+  const payload = numero ? { action, numero, mdp } : { action, nom, mdp };
+
+  if (!ws || ws.readyState !== 1) {
+    connecterWS(() => { ws.onmessage = handleAuth; envoyer(payload); });
+  } else {
+    ws.onmessage = handleAuth;
+    envoyer(payload);
+  }
+
+  function handleAuth(e) {
+    const p = JSON.parse(e.data);
+    ws.onmessage = (ev) => { try { traiterMessage(JSON.parse(ev.data)); } catch(err){} };
+    if (p.ok) {
+      session = { connecte: true, nom: p.nom, numero: p.numero,
+        pays: p.pays, bio: p.bio || '', couleur: p.couleur || 'cyan',
+        statut: p.statut || 'disponible', est_admin: p.est_admin, avatar: p.avatar || '' };
+      demarrerApp();
+    } else {
+      if (p.utiliser_numero) document.getElementById('login-numero-field').style.display = 'block';
+      msgAuth(p.msg, false);
+    }
+  }
+}
+
+function demarrerApp() {
+  document.getElementById('auth-screen').classList.remove('active');
+  document.getElementById('app-screen').classList.add('active');
+  majInfosSession();
+  chargerConversations();
+  chargerEnLigne();
+  chargerGroupes();
+  chargerCanaux();
+  if (session.est_admin) document.getElementById('btn-admin').style.display = 'flex';
+}
+
+function seDeconnecter() {
+  envoyer({ action: 'deconnecter' });
+  session = { connecte: false };
+  chatActif = null;
+  if (ws) { ws.close(); ws = null; }
+  document.getElementById('app-screen').classList.remove('active');
+  document.getElementById('auth-screen').classList.add('active');
+}
+
+// ═══════════════════════════════════════════════════════
+// INFOS SESSION
+// ═══════════════════════════════════════════════════════
+function majInfosSession() {
+  document.getElementById('my-name').textContent = session.nom;
+  document.getElementById('my-number').textContent = session.numero;
+  const av = session.avatar || (session.nom ? session.nom[0].toUpperCase() : '?');
+  document.getElementById('my-avatar').textContent = av;
+}
+
+// ═══════════════════════════════════════════════════════
+// ONGLETS SIDEBAR
+// ═══════════════════════════════════════════════════════
+function changerOnglet(onglet) {
+  ongletActif = onglet;
+  document.querySelectorAll('.stab').forEach(t => t.classList.remove('active'));
+  document.getElementById('stab-' + onglet).classList.add('active');
+  document.getElementById('search-input').value = '';
+  if (onglet === 'convs')   afficherConversations();
+  if (onglet === 'online')  afficherEnLigne();
+  if (onglet === 'groupes') afficherGroupes();
+  if (onglet === 'canaux')  afficherCanaux();
+}
+
+function filtrerListe() {
+  const q = document.getElementById('search-input').value.toLowerCase();
+  document.querySelectorAll('.conv-item').forEach(el => {
+    const texte = el.textContent.toLowerCase();
+    el.style.display = texte.includes(q) ? '' : 'none';
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// CONVERSATIONS
+// ═══════════════════════════════════════════════════════
+function chargerConversations() {
+  attendreReponse({ action: 'mes_conversations' }, (p) => {
+    if (p.ok) { conversations = p.conversations; if (ongletActif==='convs') afficherConversations(); }
+  });
+}
+
+function afficherConversations() {
+  const panel = document.getElementById('list-panel');
+  if (!conversations.length) {
+    panel.innerHTML = '<div class="empty-list"><div class="ico">💬</div>Aucune conversation<br><small>Clique sur ✏️ pour commencer</small></div>';
+    return;
+  }
+  panel.innerHTML = conversations.map(c => `
+    <div class="conv-item" onclick="ouvrirChat('${c.numero}','${escHtml(c.nom)}','prive')">
+      <div class="conv-avatar">${(c.avatar||c.nom[0]).toUpperCase()}</div>
+      <div class="conv-info">
+        <div class="conv-name">${escHtml(c.nom)}</div>
+        <div class="conv-last">${escHtml(c.dernier_msg)}</div>
+      </div>
+      <div class="conv-meta">
+        <div class="conv-time">${c.heure.slice(11,16)||''}</div>
+        ${c.non_lus ? `<div class="badge">${c.non_lus}</div>` : ''}
+      </div>
+    </div>`).join('');
+}
+
+// ═══════════════════════════════════════════════════════
+// EN LIGNE
+// ═══════════════════════════════════════════════════════
+function chargerEnLigne() {
+  attendreReponse({ action: 'en_ligne' }, (p) => {
+    if (p.ok) { enLigne = p.users; if (ongletActif==='online') afficherEnLigne(); }
+  });
+}
+
+function afficherEnLigne() {
+  const panel = document.getElementById('list-panel');
+  if (!enLigne.length) {
+    panel.innerHTML = '<div class="empty-list"><div class="ico">🟢</div>Personne en ligne</div>';
+    return;
+  }
+  panel.innerHTML = enLigne.map(u => `
+    <div class="conv-item" onclick="ouvrirChat('${u.numero}','${escHtml(u.nom)}','prive')">
+      <div class="conv-avatar" style="position:relative">${(u.avatar||u.nom[0]).toUpperCase()}
+        <div class="online-dot"></div>
+      </div>
+      <div class="conv-info">
+        <div class="conv-name">${escHtml(u.nom)}</div>
+        <div class="conv-last">${statutLabel(u.statut)}</div>
+      </div>
+    </div>`).join('');
+}
+
+// ═══════════════════════════════════════════════════════
+// GROUPES
+// ═══════════════════════════════════════════════════════
+function chargerGroupes() {
+  attendreReponse({ action: 'mes_groupes' }, (p) => {
+    if (p.ok) { mesGroupes = p.groupes; if (ongletActif==='groupes') afficherGroupes(); }
+  });
+}
+
+function afficherGroupes() {
+  const panel = document.getElementById('list-panel');
+  let html = `<div class="conv-item" onclick="creerGroupe()" style="border-bottom:2px solid var(--border)">
+    <div class="conv-avatar" style="background:var(--accent2)">+</div>
+    <div class="conv-info"><div class="conv-name">Créer un groupe</div></div>
+  </div>`;
+  if (!mesGroupes.length) {
+    html += '<div class="empty-list"><div class="ico">👥</div>Aucun groupe</div>';
+  } else {
+    html += mesGroupes.map(g => `
+      <div class="conv-item" onclick="ouvrirChat('${g.id}','${escHtml(g.nom)}','groupe','${g.id}')">
+        <div class="conv-avatar" style="background:#1a3a2a">👥</div>
+        <div class="conv-info">
+          <div class="conv-name">${escHtml(g.nom)}</div>
+          <div class="conv-last">${g.membres} membre${g.membres>1?'s':''} ${g.createur?'· Admin':''}
+            ${g.epingle ? '· 📌' : ''}</div>
+        </div>
+        <div class="conv-meta">
+          <button class="icon-btn" style="font-size:14px" onclick="event.stopPropagation();gererGroupe('${g.id}','${escHtml(g.nom)}',${g.createur})">⚙️</button>
+        </div>
+      </div>`).join('');
+  }
+  panel.innerHTML = html;
+}
+
+function creerGroupe() {
+  const nom = prompt('Nom du groupe:');
+  if (!nom || !nom.trim()) return;
+  attendreReponse({ action: 'creer_groupe', nom: nom.trim() }, (p) => {
+    if (p.ok) { toast(`Groupe "${p.nom}" créé!`, 'ok'); chargerGroupes(); }
+    else toast(p.msg, 'err');
+  });
+}
+
+function gererGroupe(id, nom, estCreateur) {
+  const m = document.getElementById('modal-groupe');
+  document.getElementById('modal-groupe-titre').textContent = `👥 ${nom}`;
+  let html = '';
+  // Historique
+  html += `<button class="btn btn-primary" onclick="voirHistGroupe('${id}')" style="margin-bottom:8px;width:100%">📜 Voir l'historique</button>`;
+  if (estCreateur) {
+    html += `
+      <div class="field"><label>AJOUTER UN MEMBRE (numéro)</label>
+        <input id="grp-add-num" placeholder="+225..." /></div>
+      <button class="btn btn-primary" onclick="ajouterMembreGroupe('${id}')" style="margin-bottom:8px">➕ Ajouter</button>
+      <div class="field"><label>RENOMMER LE GROUPE</label>
+        <input id="grp-new-nom" placeholder="Nouveau nom…" /></div>
+      <button class="btn btn-primary" onclick="renommerGroupe('${id}')" style="margin-bottom:8px">✏️ Renommer</button>
+      <div class="field"><label>MESSAGE ÉPINGLÉ</label>
+        <input id="grp-pin-txt" placeholder="Texte à épingler…" /></div>
+      <button class="btn btn-primary" onclick="epinglerGroupe('${id}')">📌 Épingler</button>`;
+  }
+  html += `<hr style="border-color:var(--border);margin:16px 0">
+    <button class="btn btn-danger" onclick="quitterGroupe('${id}','${nom}')">🚪 Quitter le groupe</button>`;
+  document.getElementById('modal-groupe-contenu').innerHTML = html;
+  m.classList.add('open');
+}
+
+function ajouterMembreGroupe(id) {
+  const num = document.getElementById('grp-add-num').value.trim();
+  attendreReponse({ action: 'ajouter_groupe', id_groupe: id, numero: num }, (p) => {
+    toast(p.msg, p.ok ? 'ok' : 'err');
+  });
+}
+
+function renommerGroupe(id) {
+  const nom = document.getElementById('grp-new-nom').value.trim();
+  if (!nom) return;
+  attendreReponse({ action: 'renommer_groupe', id_groupe: id, nom }, (p) => {
+    toast(p.msg, p.ok ? 'ok' : 'err');
+    if (p.ok) { fermerModal('modal-groupe'); chargerGroupes(); }
+  });
+}
+
+function quitterGroupe(id, nom) {
+  if (!confirm(`Quitter le groupe "${nom}" ?`)) return;
+  attendreReponse({ action: 'quitter_groupe', id_groupe: id }, (p) => {
+    toast(p.msg, p.ok ? 'ok' : 'err');
+    if (p.ok) { fermerModal('modal-groupe'); chargerGroupes(); }
+  });
+}
+
+function epinglerGroupe(id) {
+  const texte = document.getElementById('grp-pin-txt').value.trim();
+  if (!texte) return;
+  attendreReponse({ action: 'epingler_groupe', id_groupe: id, texte }, (p) => {
+    toast(p.msg, p.ok ? 'ok' : 'err');
+  });
+}
+
+function voirHistGroupe(id) {
+  attendreReponse({ action: 'hist_groupe', id_groupe: id }, (p) => {
+    if (!p.ok) return toast(p.msg, 'err');
+    fermerModal('modal-groupe');
+    ouvrirChat(id, p.nom, 'groupe', id);
+    p.historique.forEach(m => {
+      const side = m.de === session.numero ? 'mine' : 'theirs';
+      ajouterBulleMessage({ de: m.de, nom_de: m.nom, texte: m.texte, heure: m.heure.slice(11,16), reply_to: m.reply_to }, side);
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// CANAUX
+// ═══════════════════════════════════════════════════════
+function chargerCanaux() {
+  attendreReponse({ action: 'lister_canaux' }, (p) => {
+    if (p.ok) { canaux = p.canaux; if (ongletActif==='canaux') afficherCanaux(); }
+  });
+}
+
+function afficherCanaux() {
+  const panel = document.getElementById('list-panel');
+  let html = `<div class="conv-item" onclick="creerCanal()" style="border-bottom:2px solid var(--border)">
+    <div class="conv-avatar" style="background:#2a1a3a">+</div>
+    <div class="conv-info"><div class="conv-name">Créer un canal</div></div>
+  </div>`;
+  if (!canaux.length) {
+    html += '<div class="empty-list"><div class="ico">📢</div>Aucun canal</div>';
+  } else {
+    html += canaux.map(c => `
+      <div class="conv-item" onclick="rejoindrePuisOuvrirCanal('${c.id}','${escHtml(c.nom)}')">
+        <div class="conv-avatar" style="background:#2a1a3a">📢</div>
+        <div class="conv-info">
+          <div class="conv-name">${escHtml(c.nom)}</div>
+          <div class="conv-last">${escHtml(c.description||'')} · ${c.membres} membres · par ${escHtml(c.createur)}</div>
+        </div>
+      </div>`).join('');
+  }
+  panel.innerHTML = html;
+}
+
+function creerCanal() {
+  const nom  = prompt('Nom du canal:');
+  if (!nom || !nom.trim()) return;
+  const desc = prompt('Description (optionnel):') || '';
+  attendreReponse({ action: 'creer_canal', nom: nom.trim(), description: desc }, (p) => {
+    if (p.ok) { toast(`Canal "${p.nom}" créé!`, 'ok'); chargerCanaux(); }
+    else toast(p.msg, 'err');
+  });
+}
+
+function rejoindrePuisOuvrirCanal(id, nom) {
+  attendreReponse({ action: 'rejoindre_canal', id_canal: id }, (p) => {
+    if (p.ok) ouvrirChat(id, nom, 'canal', id);
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// CHAT
+// ═══════════════════════════════════════════════════════
+function ouvrirChat(numero, nom, type, id) {
+  chatActif = { numero, nom, type: type||'prive', id: id||numero };
+  document.getElementById('chat-placeholder').style.display = 'none';
+  const chatMain = document.getElementById('chat-main');
+  chatMain.style.display = 'flex';
+
+  // Mettre à jour entête
+  document.getElementById('chat-name').textContent = nom;
+  const av = nom[0].toUpperCase();
+  document.getElementById('chat-avatar').textContent = av;
+  document.getElementById('messages').innerHTML = '';
+  document.getElementById('typing-indicator').textContent = '';
+
+  // Statut
+  const u = enLigne.find(u => u.numero === numero);
+  document.getElementById('chat-status').textContent = u ? '🟢 En ligne' : '⚫ Hors ligne';
+
+  // Charger historique
+  if (type === 'prive') {
+    attendreReponse({ action: 'historique', avec: numero, limite: 50 }, (p) => {
+      if (p.ok) {
+        p.historique.forEach(m => {
+          const side = m.de === session.numero ? 'mine' : 'theirs';
+          ajouterBulleMessage(m, side, true);
+        });
+        scrollToBottom();
+      }
+    });
+  } else if (type === 'groupe') {
+    attendreReponse({ action: 'hist_groupe', id_groupe: id }, (p) => {
+      if (p.ok) {
+        p.historique.forEach(m => {
+          const side = m.de === session.numero ? 'mine' : 'theirs';
+          ajouterBulleMessage({ de: m.de, nom_de: m.nom, texte: m.texte, heure: m.heure.slice(11,16), reply_to: m.reply_to }, side, true);
+        });
+        scrollToBottom();
+      }
+    });
+  } else if (type === 'canal') {
+    attendreReponse({ action: 'hist_canal', id_canal: id }, (p) => {
+      if (p.ok) {
+        p.historique.forEach(m => {
+          const side = m.de === session.numero ? 'mine' : 'theirs';
+          ajouterBulleMessage({ de: m.de, nom_de: m.nom, texte: m.texte, heure: m.heure.slice(11,16) }, side, true);
+        });
+        scrollToBottom();
+      }
+    });
+  }
+
+  // Mobile: cacher sidebar
+  if (window.innerWidth <= 700) {
+    document.getElementById('sidebar').classList.add('hidden');
+  }
+}
+
+function retourSidebar() {
+  document.getElementById('sidebar').classList.remove('hidden');
+  chatActif = null;
+}
+
+function envoyerMessage() {
+  const input = document.getElementById('msg-input');
+  const texte = input.value.trim();
+  if (!texte || !chatActif) return;
+  input.value = ''; input.style.height = 'auto';
+
+  const payload = { texte };
+  if (replyTo) { payload.reply_to = replyTo; annulerReply(); }
+
+  if (chatActif.type === 'prive') {
+    payload.action = 'message'; payload.dest = chatActif.numero;
+    attendreReponse(payload, (p) => {
+      if (p.ok) {
+        ajouterBulleMessage({ de: session.numero, texte, heure: now(), msg_id: p.msg_id,
+          reply_to: payload.reply_to }, 'mine');
+        scrollToBottom(); chargerConversations();
+      } else toast(p.msg, 'err');
+    });
+  } else if (chatActif.type === 'groupe') {
+    envoyer({ action: 'msg_groupe', id_groupe: chatActif.id, texte, reply_to: payload.reply_to });
+    ajouterBulleMessage({ de: session.numero, texte, heure: now() }, 'mine');
+    scrollToBottom();
+  } else if (chatActif.type === 'canal') {
+    envoyer({ action: 'msg_canal', id_canal: chatActif.id, texte });
+    ajouterBulleMessage({ de: session.numero, texte, heure: now() }, 'mine');
+    scrollToBottom();
+  }
+}
+
+function handleKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); envoyerMessage(); }
+}
+
+function handleTyping() {
+  const input = document.getElementById('msg-input');
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+  if (chatActif && chatActif.type === 'prive') {
+    envoyer({ action: 'typing', dest: chatActif.numero, actif: true });
+    clearTimeout(typingTimer);
+    typingTimer = setTimeout(() => envoyer({ action: 'typing', dest: chatActif.numero, actif: false }), 2000);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// BULLES DE MESSAGES
+// ═══════════════════════════════════════════════════════
+function ajouterBulleMessage(m, side, noScroll) {
+  if (!side) {
+    if (!chatActif) return;
+    side = m.de === session.numero ? 'mine' : 'theirs';
+  }
+  const msgs = document.getElementById('messages');
+  if (!msgs) return;
+
+  let replyHtml = '';
+  if (m.reply_to) replyHtml = `<div class="msg-reply">↩ ${escHtml(m.reply_to)}</div>`;
+
+  let contenu = escHtml(m.texte || '');
+  if (m.supprime) contenu = '<em class="msg-deleted">Message supprimé</em>';
+
+  // Actions sur message (mine seulement)
+  let actionsHtml = '';
+  if (side === 'mine' && chatActif && chatActif.type === 'prive') {
+    actionsHtml = `<div class="msg-actions">
+      <button class="msg-action-btn" onclick="modifierMsg('${m.msg_id||''}','${chatActif.numero}')" title="Modifier">✏️</button>
+      <button class="msg-action-btn" onclick="supprimerMsg('${m.msg_id||''}','${chatActif.numero}')" title="Supprimer">🗑️</button>
+      <button class="msg-action-btn" onclick="transfererMsg('${escAttr(m.texte||'')}')" title="Transférer">↪️</button>
+      <button class="msg-action-btn" onclick="setReply('${escAttr(m.texte||'')}')" title="Répondre">↩️</button>
+    </div>`;
+  } else if (side === 'theirs') {
+    actionsHtml = `<div class="msg-actions">
+      <button class="msg-action-btn" onclick="setReply('${escAttr(m.texte||'')}')" title="Répondre">↩️</button>
+      <button class="msg-action-btn" onclick="reagir('${m.msg_id||''}','${chatActif ? chatActif.numero : ''}')" title="Réagir">😊</button>
+      <button class="msg-action-btn" onclick="transfererMsg('${escAttr(m.texte||'')}')" title="Transférer">↪️</button>
+    </div>`;
+  }
+
+  let nomHtml = '';
+  if (side === 'theirs' && (chatActif && (chatActif.type === 'groupe' || chatActif.type === 'canal'))) {
+    nomHtml = `<div class="msg-sender">${escHtml(m.nom_de || '')}</div>`;
+  }
+
+  const div = document.createElement('div');
+  div.className = `msg-row ${side}`;
+  div.setAttribute('data-id', m.msg_id || '');
+  div.innerHTML = `
+    ${nomHtml}
+    <div class="msg-bubble" style="position:relative">
+      ${replyHtml}
+      <span class="msg-text">${contenu}</span>
+      ${m.modifie ? '<span class="msg-modified"> (modifié)</span>' : ''}
+      <div class="msg-reactions"></div>
+      ${actionsHtml}
+    </div>
+    <div class="msg-meta">
+      <span>${m.heure ? String(m.heure).slice(0,5) : ''}</span>
+      ${side === 'mine' ? '<span class="tick">✓</span>' : ''}
+    </div>`;
+  msgs.appendChild(div);
+  if (!noScroll) scrollToBottom();
+}
+
+function ajouterSystemeMsg(texte) {
+  const msgs = document.getElementById('messages');
+  if (!msgs) return;
+  const div = document.createElement('div');
+  div.className = 'system-msg';
+  div.textContent = texte;
+  msgs.appendChild(div);
+  scrollToBottom();
+}
+
+function scrollToBottom() {
+  const msgs = document.getElementById('messages');
+  if (msgs) msgs.scrollTop = msgs.scrollHeight;
+}
+
+function majStatutMessage(msg_id, statut) {
+  const el = document.querySelector(`[data-id="${msg_id}"] .tick`);
+  if (el) el.textContent = statut;
+}
+
+function majTousLus(par) {
+  if (chatActif && chatActif.numero === par) {
+    document.querySelectorAll('.msg-row.mine .tick').forEach(el => el.textContent = '✓✓');
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// ACTIONS MESSAGES
+// ═══════════════════════════════════════════════════════
+function setReply(texte) {
+  replyTo = texte;
+  document.getElementById('reply-text').textContent = texte.substring(0, 60);
+  document.getElementById('reply-preview').style.display = 'flex';
+  document.getElementById('msg-input').focus();
+}
+function annulerReply() {
+  replyTo = null;
+  document.getElementById('reply-preview').style.display = 'none';
+}
+
+function modifierMsg(msg_id, avec) {
+  if (!msg_id) return;
+  const nouveau = prompt('Nouveau texte:');
+  if (!nouveau) return;
+  attendreReponse({ action: 'modifier_msg', msg_id, texte: nouveau, avec }, (p) => {
+    toast(p.msg, p.ok ? 'ok' : 'err');
+  });
+}
+
+function supprimerMsg(msg_id, avec) {
+  if (!msg_id) return;
+  if (!confirm('Supprimer ce message pour tout le monde?')) return;
+  attendreReponse({ action: 'supprimer_msg', msg_id, avec }, (p) => {
+    toast(p.ok ? 'Message supprimé.' : p.msg, p.ok ? 'ok' : 'err');
+  });
+}
+
+function transfererMsg(texte) {
+  const dest = prompt('Envoyer à quel numéro?');
+  if (!dest) return;
+  attendreReponse({ action: 'transferer_msg', texte, dest }, (p) => {
+    toast(p.ok ? 'Message transféré!' : p.msg, p.ok ? 'ok' : 'err');
+  });
+}
+
+function reagir(msg_id, dest) {
+  const emojis = ['👍','❤️','😂','😮','😢','🔥'];
+  const emoji  = prompt(`Choisir une réaction:\n${emojis.join(' ')}`);
+  if (!emoji) return;
+  envoyer({ action: 'reaction', dest, msg_id, emoji });
+}
+
+// ═══════════════════════════════════════════════════════
+// RECHERCHE
+// ═══════════════════════════════════════════════════════
+function ouvrirRecherche() {
+  document.getElementById('search-numero').value = '';
+  document.getElementById('search-result').innerHTML = '';
+  ouvrirModal('modal-recherche');
+}
+
+let searchTimer = null;
+function rechercherContact() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    const num = document.getElementById('search-numero').value.trim();
+    if (!num) return;
+    attendreReponse({ action: 'chercher', numero: num }, (p) => {
+      if (p.ok) {
+        const u = p.user;
+        document.getElementById('search-result').innerHTML = `
+          <div class="conv-item" style="border:1px solid var(--border);border-radius:10px;margin-top:12px" onclick="fermerModal('modal-recherche');ouvrirChat('${u.numero}','${escAttr(u.nom)}','prive')">
+            <div class="conv-avatar">${u.avatar||u.nom[0].toUpperCase()}</div>
+            <div class="conv-info">
+              <div class="conv-name">${escHtml(u.nom)}</div>
+              <div class="conv-last">${u.pays} · ${u.en_ligne ? '🟢 En ligne' : '⚫ Hors ligne'}</div>
+            </div>
+          </div>`;
+      } else {
+        document.getElementById('search-result').innerHTML = `<div style="color:var(--muted);font-size:13px;margin-top:12px">${p.msg}</div>`;
+      }
+    });
+  }, 500);
+}
+
+function ouvrirRechercheMsg() {
+  document.getElementById('search-msg-input').value = '';
+  document.getElementById('search-msg-results').innerHTML = '';
+  ouvrirModal('modal-search-msg');
+}
+
+function rechercherDansMessages() {
+  const mot = document.getElementById('search-msg-input').value.trim();
+  if (!mot || !chatActif || chatActif.type !== 'prive') return;
+  attendreReponse({ action: 'rechercher_msg', mot, avec: chatActif.numero }, (p) => {
+    if (!p.ok) return;
+    const el = document.getElementById('search-msg-results');
+    if (!p.resultats.length) { el.innerHTML = '<div style="color:var(--muted);font-size:13px;margin-top:12px">Aucun résultat</div>'; return; }
+    el.innerHTML = p.resultats.map(m => `
+      <div style="padding:10px;border-bottom:1px solid var(--border);font-size:13px">
+        <div style="color:var(--muted);font-size:11px">${(m.heure||'').slice(0,16)}</div>
+        <div>${escHtml(m.texte)}</div>
+      </div>`).join('');
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// PROFIL
+// ═══════════════════════════════════════════════════════
+function ouvrirProfil() {
+  document.getElementById('profil-avatar-big').textContent = session.avatar || session.nom[0].toUpperCase();
+  document.getElementById('profil-name-big').textContent = session.nom;
+  document.getElementById('profil-number-big').textContent = session.numero;
+  document.getElementById('profil-bio-big').textContent = session.bio || '—';
+  document.getElementById('p-avatar').value = session.avatar || '';
+  document.getElementById('p-bio').value = session.bio || '';
+  document.getElementById('p-statut').value = session.statut || 'disponible';
+  document.getElementById('p-couleur').value = session.couleur || 'cyan';
+  ouvrirModal('modal-profil');
+}
+
+function sauverProfil() {
+  const avatar  = document.getElementById('p-avatar').value.trim();
+  const bio     = document.getElementById('p-bio').value.trim();
+  const statut  = document.getElementById('p-statut').value;
+  const couleur = document.getElementById('p-couleur').value;
+  if (avatar) envoyer({ action: 'modifier_avatar', avatar });
+  if (bio !== session.bio) envoyer({ action: 'modifier_bio', bio });
+  if (statut !== session.statut) envoyer({ action: 'changer_statut', statut });
+  if (couleur !== session.couleur) envoyer({ action: 'changer_couleur', couleur });
+  session.avatar = avatar; session.bio = bio; session.statut = statut; session.couleur = couleur;
+  majInfosSession(); fermerModal('modal-profil'); toast('Profil mis à jour!', 'ok');
+}
+
+function changerMdp() {
+  const ancien = document.getElementById('p-ancien-mdp').value.trim();
+  const nouveau= document.getElementById('p-nouveau-mdp').value.trim();
+  attendreReponse({ action: 'changer_mdp', ancien, nouveau }, (p) => {
+    toast(p.msg, p.ok ? 'ok' : 'err');
+  });
+}
+
+function definirPin() {
+  const pin = document.getElementById('p-pin').value.trim();
+  attendreReponse({ action: 'definir_pin', pin }, (p) => toast(p.msg, p.ok ? 'ok' : 'err'));
+}
+function supprimerPin() {
+  attendreReponse({ action: 'supprimer_pin' }, (p) => toast(p.msg, p.ok ? 'ok' : 'err'));
+}
+
+function voirProfilContact() {
+  if (!chatActif || chatActif.type !== 'prive') return;
+  attendreReponse({ action: 'chercher', numero: chatActif.numero }, (p) => {
+    if (!p.ok) return;
+    const u = p.user;
+    contactVu = u;
+    document.getElementById('contact-avatar').textContent = u.avatar || u.nom[0].toUpperCase();
+    document.getElementById('contact-name').textContent = u.nom;
+    document.getElementById('contact-number').textContent = u.numero;
+    document.getElementById('contact-bio').textContent = u.bio || '—';
+    document.getElementById('contact-pays').textContent = u.pays || '—';
+    document.getElementById('contact-statut').textContent = statutLabel(u.statut);
+    document.getElementById('contact-enligne').textContent = u.en_ligne ? '🟢 En ligne' : '⚫ Hors ligne';
+    ouvrirModal('modal-contact');
+  });
+}
+
+function ouvrirChatDepuisContact() {
+  if (!contactVu) return;
+  fermerModal('modal-contact');
+  ouvrirChat(contactVu.numero, contactVu.nom, 'prive');
+}
+
+function bloquerContact() {
+  if (!contactVu) return;
+  if (!confirm(`Bloquer ${contactVu.nom} ?`)) return;
+  envoyer({ action: 'bloquer', numero: contactVu.numero, bloquer: true });
+  fermerModal('modal-contact');
+  toast('Utilisateur bloqué.', 'ok');
+}
+
+function effacerHistorique() {
+  if (!chatActif || chatActif.type !== 'prive') return;
+  if (!confirm('Effacer tout l\'historique avec cet utilisateur ?')) return;
+  attendreReponse({ action: 'effacer_historique', avec: chatActif.numero }, (p) => {
+    if (p.ok) { document.getElementById('messages').innerHTML = ''; toast('Historique effacé.', 'ok'); }
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// ADMIN
+// ═══════════════════════════════════════════════════════
+function ouvrirAdmin() {
+  if (!session.est_admin) {
+    const code = prompt('Code admin:');
+    if (!code) return;
+    attendreReponse({ action: 'admin_login', code }, (p) => {
+      if (p.ok) { session.est_admin = true; toast('Accès admin accordé!', 'ok'); chargerAdmin(); }
+      else toast(p.msg, 'err');
+    });
+  } else {
+    chargerAdmin();
+  }
+}
+
+function chargerAdmin() {
+  attendreReponse({ action: 'admin_stats' }, (p) => {
+    if (!p.ok) return;
+    const s = p.stats;
+    document.getElementById('admin-stats').innerHTML = [
+      ['👥', s.utilisateurs, 'Utilisateurs'],
+      ['🟢', s.en_ligne, 'En ligne'],
+      ['💬', s.messages_total, 'Messages'],
+      ['📁', s.fichiers_total, 'Fichiers'],
+    ].map(([ico,val,lab]) => `
+      <div class="stat-card">
+        <div style="font-size:24px">${ico}</div>
+        <div class="stat-value">${val}</div>
+        <div class="stat-label">${lab}</div>
+      </div>`).join('');
+    ouvrirModal('modal-admin');
+    chargerUsersAdmin();
+  });
+}
+
+function chargerUsersAdmin() {
+  attendreReponse({ action: 'admin_users' }, (p) => {
+    if (!p.ok) return;
+    const el = document.getElementById('admin-users-list');
+    el.innerHTML = p.users.filter(u => u.en_ligne).map(u => `
+      <div class="user-row">
+        <div class="conv-avatar" style="width:34px;height:34px;font-size:14px">${(u.avatar||u.nom[0]).toUpperCase()}</div>
+        <div>
+          <div style="font-weight:600;font-size:14px">${escHtml(u.nom)}</div>
+          <div style="font-size:12px;color:var(--muted)">${u.numero}</div>
+        </div>
+        <div class="user-actions">
+          <button class="btn-sm" style="background:var(--warn);color:#000" onclick="adminKick('${u.numero}')">Kick</button>
+          <button class="btn-sm" style="background:var(--danger);color:#fff" onclick="adminBannir('${u.numero}','${escAttr(u.nom)}')">Bannir</button>
+        </div>
+      </div>`).join('');
+  });
+}
+
+function adminBroadcast() {
+  const msg = document.getElementById('admin-broadcast-msg').value.trim();
+  if (!msg) return;
+  attendreReponse({ action: 'admin_broadcast', msg }, (p) => {
+    toast(p.ok ? p.msg : p.msg, p.ok ? 'ok' : 'err');
+    document.getElementById('admin-broadcast-msg').value = '';
+  });
+}
+
+function adminKick(numero) {
+  if (!confirm(`Déconnecter ${numero} ?`)) return;
+  attendreReponse({ action: 'admin_kick', numero }, (p) => {
+    toast(p.ok ? p.msg : p.msg, p.ok ? 'ok' : 'err');
+    chargerUsersAdmin();
+  });
+}
+
+function adminBannir(numero, nom) {
+  if (!confirm(`Bannir ${nom} (${numero}) définitivement ?`)) return;
+  attendreReponse({ action: 'admin_bannir', numero, bannir: true }, (p) => {
+    toast(p.ok ? `${nom} banni.` : p.msg, p.ok ? 'ok' : 'err');
+    chargerUsersAdmin();
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// UTILITAIRES
+// ═══════════════════════════════════════════════════════
+const _pendants = {};
+let _pendantId = 0;
+
+function attendreReponse(payload, callback) {
+  const id = ++_pendantId;
+  _pendants[id] = callback;
+  const orig = ws.onmessage;
+  ws.onmessage = (e) => {
+    const p = JSON.parse(e.data);
+    // Si c'est un message de type push (en temps réel), ne pas intercepter
+    const pushTypes = ['message','typing','statut','statut_change','msg_groupe','msg_canal',
+      'fichier','vocal','reaction','lu','livre','annonce','kick','timeout',
+      'invitation_groupe','groupe_renomme','membre_quitte','epingle','msg_modifie','msg_supprime'];
+    if (pushTypes.includes(p.type)) { traiterMessage(p); return; }
+    // Sinon c'est une réponse à notre requête
+    ws.onmessage = (ev) => { try { traiterMessage(JSON.parse(ev.data)); } catch(err){} };
+    delete _pendants[id];
+    callback(p);
+  };
+  envoyer(payload);
+}
+
+function ouvrirModal(id) { document.getElementById(id).classList.add('open'); }
+function fermerModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(m => {
+  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+});
+
+function toast(msg, type) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'toast show ' + (type||'');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function statutLabel(s) {
+  const m = { disponible:'🟢 Disponible', occupe:'🟡 Occupé', ne_pas_deranger:'🔴 Ne pas déranger', absent:'⚫ Absent' };
+  return m[s] || s || '—';
+}
+
+function now() {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+
+function escHtml(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escAttr(s) {
+  if (!s) return '';
+  return String(s).replace(/'/g,"\\'").replace(/"/g,'\\"');
+}
+</script>
+</body>
+</html>
