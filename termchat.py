@@ -2,8 +2,11 @@
 # -*- coding: utf-8 -*-
 """TermChat v6.0 — Client — by Aboudev Labs CI"""
 
-import socket, threading, json, os, base64
+import socket, threading, json, os, base64, ssl
 import datetime, time, sys, signal, hashlib
+from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes
 
 R="\033[91m";B="\033[1m";Z="\033[0m";G="\033[90m";V="\033[92m";J="\033[93m";M="\033[95m"
 COULEURS={"cyan":"\033[96m","vert":"\033[92m","jaune":"\033[93m","magenta":"\033[95m","bleu":"\033[94m","rouge":"\033[91m","blanc":"\033[97m"}
@@ -16,18 +19,24 @@ PAYS={"1":("🇨🇮 Cote d'Ivoire","+225"),"2":("🇸🇳 Senegal","+221"),"3":
 
 session={"connecte":False,"nom":None,"numero":None,"pays":None,"bio":"","couleur":"cyan","statut":"disponible","est_admin":False,"non_lus":0,"a_pin":False}
 sock_cli=None;en_cours=True;reponses=[];rep_lock=threading.Lock()
+phrases_secretes={}  # numero_contact -> phrase secrete (en memoire seulement, jamais envoyee au serveur)
 
-def generer_cle(n1,n2): return hashlib.sha256("".join(sorted([n1,n2])).encode()).hexdigest()
-def chiffrer(t,cle):
-    try:
-        o=t.encode();k=(cle*((len(o)//len(cle))+1)).encode()
-        return base64.b64encode(bytes(a^b for a,b in zip(o,k))).decode()
-    except: return t
-def dechiffrer(t64,cle):
-    try:
-        o=base64.b64decode(t64.encode());k=(cle*((len(o)//len(cle))+1)).encode()
-        return bytes(a^b for a,b in zip(o,k)).decode("utf-8")
-    except: return t64
+def generer_cle(n1, n2, phrase_secrete):
+    """Derive une cle Fernet (AES) a partir d'une phrase secrete que SEULS
+    les deux interlocuteurs connaissent (a se transmettre par un canal a
+    part, jamais via TermChat). Le sel (numeros, publics) sert uniquement
+    a rendre la cle unique par conversation, pas a la proteger."""
+    sel = "".join(sorted([n1, n2])).encode()
+    kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=sel, iterations=200_000)
+    return base64.urlsafe_b64encode(kdf.derive(phrase_secrete.encode()))
+
+def chiffrer(t, cle):
+    try: return Fernet(cle).encrypt(t.encode()).decode()
+    except Exception: return t
+
+def dechiffrer(t64, cle):
+    try: return Fernet(cle).decrypt(t64.encode()).decode()
+    except (InvalidToken, Exception): return "🔒 [Message illisible - phrase secrete incorrecte]"
 
 def clear(): os.system("clear" if os.name!="nt" else "cls")
 def beep(): print("\a",end="",flush=True)
@@ -92,7 +101,8 @@ def afficher_entrant(p):
     if t=="message":
         num_exp=p.get("numero","");texte=p.get("texte","")
         if p.get("chiffre") and session.get("numero"):
-            texte=dechiffrer(texte,generer_cle(session["numero"],num_exp))
+            phrase=phrases_secretes.get(num_exp)
+            texte=dechiffrer(texte,generer_cle(session["numero"],num_exp,phrase)) if phrase else "🔒 [Chiffre - phrase secrete non definie dans cette session]"
         beep();reply=p.get("reply_to")
         print(f"\n{V}{B}[{h}] 💬 {p.get('de','?')} ({num_exp}){Z}")
         if reply: print(f"{G}     ↩️  {reply[:40]}{Z}")
@@ -179,7 +189,6 @@ def menu_principal():
     print(f"  {C2}2{Z} — 👥  Groupes")
     print(f"  {C2}3{Z} — ⭐  Favoris")
     print(f"  {C2}4{Z} — 📎  Envoyer un fichier")
-    print(f"  {C2}5{Z} — 🔍  Chercher un utilisateur")
     print(f"  {C2}6{Z} — 🌐  En ligne")
     print(f"  {C2}7{Z} — 👤  Mon profil")
     print(f"  {C2}8{Z} — 😊  Statut")
@@ -279,7 +288,16 @@ def menu_messages():
 def _ouvrir_chat(nd):
     envoyer_cli({"action":"chercher","numero":nd});rep=attendre()
     if not rep or not rep.get("ok"): erreur(rep.get("msg","Introuvable.") if rep else "?");entree();return
-    u=rep["user"];st=STATUTS_ICONS.get(u.get("statut","disponible"),"");dc=u.get("derniere_connexion")
+    u=rep["user"];st=STATUTS_ICONS.get(u.get("statut","disponible"),"")
+    chiffrer_msgs=False;cle_chat=None
+    if input(f"\n{J}Activer chiffrement? (o/n): {Z}").strip().lower()=="o":
+        phrase=input(f"{J}Phrase secrete partagee avec {u['nom']} (a se transmettre hors TermChat): {Z}").strip()
+        if phrase:
+            chiffrer_msgs=True;cle_chat=generer_cle(session["numero"],nd,phrase)
+            phrases_secretes[nd]=phrase
+            succes("Chiffrement active 🔐")
+        else:
+            info("Phrase vide, chiffrement desactive.")
     envoyer_cli({"action":"historique","avec":nd,"limite":20});rep_h=attendre(8)
     if rep_h and rep_h.get("ok"):
         hist=rep_h.get("historique",[])
@@ -293,14 +311,10 @@ def _ouvrir_chat(nd):
                 lu=" ✓✓" if (moi_ and msg.get("lu")) else (" ✓" if moi_ else "")
                 texte=msg.get("texte","");reply=msg.get("reply_to")
                 if msg.get("chiffre") and msg.get("type")!="fichier":
-                    texte=dechiffrer(texte,generer_cle(session["numero"],nd))+" 🔐"
+                    texte=(dechiffrer(texte,cle_chat)+" 🔐") if cle_chat else "🔒 [Chiffre - active le chiffrement pour lire]"
                 if reply: print(f"  {G}↩️  {reply[:30]}{Z}")
                 print(f"{G}{dt}{Z} {col}{B}{nom_s}{Z}{lu} {texte}")
     print(f"\n{V}✅ {u['nom']} — {st}{Z}")
-    if dc and not u.get("en_ligne"): print(f"{G}   Vu le: {dc}{Z}")
-    chiffrer_msgs=False;cle_chat=None
-    if input(f"\n{J}Activer chiffrement? (o/n): {Z}").strip().lower()=="o":
-        chiffrer_msgs=True;cle_chat=generer_cle(session["numero"],nd);succes("Chiffrement active 🔐")
     dernier_msg_id=None;expire_prochain=None
     print(f"\n{G}exit | /fichier | /vocal | /auto N | /repondre | /reaction | /rechercher | /effacer | /favori{Z}\n")
     while True:
@@ -308,8 +322,14 @@ def _ouvrir_chat(nd):
         except: break
         if texte.lower()=="exit": break
         if not texte: continue
-        if texte.startswith("/fichier "): _envoyer_fichier(nd,texte[9:].strip());continue
-        if texte.startswith("/vocal "): _envoyer_vocal(nd,texte[7:].strip());continue
+        if texte.startswith("/fichier "):
+            mid=_envoyer_fichier(nd,texte[9:].strip())
+            if mid: dernier_msg_id=mid
+            continue
+        if texte.startswith("/vocal "):
+            mid=_envoyer_vocal(nd,texte[7:].strip())
+            if mid: dernier_msg_id=mid
+            continue
         if texte.startswith("/auto "):
             try: expire_prochain=int(texte.split()[1]);info(f"Prochain message auto-detruit dans {expire_prochain}s.")
             except: erreur("Usage: /auto 30")
@@ -367,31 +387,31 @@ def envoyer_fichier_menu():
 
 def _envoyer_fichier(nd,chemin):
     chemin=os.path.expanduser(chemin)
-    if not os.path.isfile(chemin): erreur(f"Introuvable: {chemin}");return
+    if not os.path.isfile(chemin): erreur(f"Introuvable: {chemin}");return None
     taille=os.path.getsize(chemin)
-    if taille>50*1024*1024: erreur("Max 50 MB.");return
+    if taille>50*1024*1024: erreur("Max 50 MB.");return None
     nom_f=os.path.basename(chemin);print(f"{G}📤 Envoi {nom_f} ({fmt(taille)})...{Z}")
     try:
         with open(chemin,"rb") as f: c64=base64.b64encode(f.read()).decode()
-    except Exception as e: erreur(f"Lecture: {e}");return
+    except Exception as e: erreur(f"Lecture: {e}");return None
     envoyer_cli({"action":"envoyer_fichier","dest":nd,"nom_fichier":nom_f,"contenu":c64,"taille":taille})
     rep=attendre(20)
-    if rep and rep.get("ok"): succes(rep.get("msg","Envoye!"))
-    else: erreur(rep.get("msg","Erreur") if rep else "?")
+    if rep and rep.get("ok"): succes(rep.get("msg","Envoye!"));return rep.get("msg_id")
+    else: erreur(rep.get("msg","Erreur") if rep else "?");return None
 
 def _envoyer_vocal(nd,chemin):
     chemin=os.path.expanduser(chemin)
-    if not os.path.isfile(chemin): erreur(f"Introuvable: {chemin}");return
+    if not os.path.isfile(chemin): erreur(f"Introuvable: {chemin}");return None
     taille=os.path.getsize(chemin)
-    if taille>50*1024*1024: erreur("Max 50 MB.");return
+    if taille>50*1024*1024: erreur("Max 50 MB.");return None
     print(f"{G}🎙️  Envoi vocal ({fmt(taille)})...{Z}")
     try:
         with open(chemin,"rb") as f: c64=base64.b64encode(f.read()).decode()
-    except Exception as e: erreur(f"Lecture: {e}");return
+    except Exception as e: erreur(f"Lecture: {e}");return None
     envoyer_cli({"action":"envoyer_vocal","dest":nd,"contenu":c64,"taille":taille,"duree":0})
     rep=attendre(20)
-    if rep and rep.get("ok"): succes(rep.get("msg","Vocal envoye!"))
-    else: erreur(rep.get("msg","Erreur") if rep else "?")
+    if rep and rep.get("ok"): succes(rep.get("msg","Vocal envoye!"));return rep.get("msg_id")
+    else: erreur(rep.get("msg","Erreur") if rep else "?");return None
 
 def voir_favoris():
     titre("⭐ CONTACTS FAVORIS");envoyer_cli({"action":"mes_favoris"});rep=attendre()
@@ -455,18 +475,6 @@ def menu_groupes():
             else: erreur(rep.get("msg","?") if rep else "?")
             entree()
         elif choix=="r": break
-
-def chercher_user():
-    titre("🔍 CHERCHER UN UTILISATEUR");numero=input("Numero: ").strip()
-    envoyer_cli({"action":"chercher","numero":numero});rep=attendre()
-    if rep and rep.get("ok"):
-        u=rep["user"];st=STATUTS_ICONS.get(u.get("statut","disponible"),"");dc=u.get("derniere_connexion")
-        print(f"\n  👤 {u['nom']}  📱 {u['numero']} {V}✓{Z}")
-        print(f"  🌍 {u.get('pays','—')}  📝 {u.get('bio','—')}")
-        print(f"  {st}")
-        if dc and not u.get("en_ligne"): print(f"  {G}Vu le: {dc}{Z}")
-    else: erreur(rep.get("msg","Introuvable.") if rep else "?")
-    entree()
 
 def voir_en_ligne():
     titre("🌐 UTILISATEURS EN LIGNE");envoyer_cli({"action":"en_ligne"});rep=attendre()
@@ -638,7 +646,19 @@ def main():
     print(f"{G}🔌 Connexion a {host}:{port}...{Z}")
     try:
         sock_cli=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-        sock_cli.settimeout(10);sock_cli.connect((host,port));sock_cli.settimeout(None)
+        sock_cli.settimeout(10);sock_cli.connect((host,port))
+        # TLS: le serveur utilise un certificat auto-signe (pas de CA reconnue),
+        # on chiffre donc le transport sans verifier la chaine de confiance.
+        # Ca protege contre l'ecoute passive sur le reseau, mais pas contre un
+        # attaquant actif capable d'usurper le serveur (pas de pinning ici).
+        try:
+            ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname=False;ctx.verify_mode=ssl.CERT_NONE
+            sock_cli=ctx.wrap_socket(sock_cli,server_hostname=host)
+            print(f"{G}🔐 Connexion chiffree (TLS){Z}")
+        except Exception as e:
+            print(f"{J}⚠️  TLS indisponible, connexion en clair ({e}){Z}")
+        sock_cli.settimeout(None)
         succes("Connecte!");print(f"{G}   📥 Fichiers → ~/termchat_downloads/{Z}\n")
     except Exception as e: erreur(f"Impossible de se connecter: {e}");sys.exit(1)
     threading.Thread(target=recevoir,daemon=True).start()
@@ -660,7 +680,6 @@ def main():
                 elif choix=="2": menu_groupes()
                 elif choix=="3": voir_favoris()
                 elif choix=="4": envoyer_fichier_menu()
-                elif choix=="5": chercher_user()
                 elif choix=="6": voir_en_ligne()
                 elif choix=="7": mon_profil()
                 elif choix=="8": changer_statut()
