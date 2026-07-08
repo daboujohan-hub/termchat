@@ -654,10 +654,17 @@ def main():
         try:
             ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             ctx.check_hostname=False;ctx.verify_mode=ssl.CERT_NONE
-            sock_cli=ctx.wrap_socket(sock_cli,server_hostname=host)
+            sock_tls=ctx.wrap_socket(sock_cli,server_hostname=host)
+            sock_cli=sock_tls
             print(f"{G}🔐 Connexion chiffree (TLS){Z}")
         except Exception as e:
+            # wrap_socket() ferme le socket sous-jacent en cas d'echec: on en
+            # recree un neuf pour le repli en clair, sinon la connexion plante.
             print(f"{J}⚠️  TLS indisponible, connexion en clair ({e}){Z}")
+            try: sock_cli.close()
+            except Exception: pass
+            sock_cli=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+            sock_cli.settimeout(10);sock_cli.connect((host,port))
         sock_cli.settimeout(None)
         succes("Connecte!");print(f"{G}   📥 Fichiers → ~/termchat_downloads/{Z}\n")
     except Exception as e: erreur(f"Impossible de se connecter: {e}");sys.exit(1)
