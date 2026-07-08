@@ -7,7 +7,8 @@ Base de donnees : Firebase Firestore (donnees permanentes)
 """
 
 import socket, threading, json, os, random, hashlib
-import datetime, time, base64, signal, sys
+import datetime, time, base64, signal, sys, ssl
+import bcrypt
 
 # Firebase Admin SDK
 try:
@@ -24,6 +25,41 @@ except ImportError:
 PORT       = int(os.environ.get("PORT", 9999))
 ADMIN_CODE = os.environ.get("ADMIN_CODE", "aboudev2025")
 FIREBASE_CREDS = os.environ.get("FIREBASE_CREDS", "")  # JSON string
+CERT_DIR   = os.path.join(os.path.expanduser("~"), ".termchat_tls")
+CERT_FILE  = os.path.join(CERT_DIR, "cert.pem")
+KEY_FILE   = os.path.join(CERT_DIR, "key.pem")
+
+def preparer_certificat_tls():
+    """Charge un certificat existant, ou en genere un auto-signe si absent.
+    Un certificat auto-signe chiffre bien le trafic (protection contre
+    l'ecoute passive), mais le client doit desactiver la verification de
+    la chaine de confiance (pas de CA reconnue) — voir termchat.py."""
+    os.makedirs(CERT_DIR, exist_ok=True)
+    if os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
+        return
+    try:
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        import datetime as dt
+        cle = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        nom = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "termchat.local")])
+        maintenant = dt.datetime.now(dt.timezone.utc)
+        cert = (x509.CertificateBuilder()
+                .subject_name(nom).issuer_name(nom).public_key(cle.public_key())
+                .serial_number(x509.random_serial_number())
+                .not_valid_before(maintenant)
+                .not_valid_after(maintenant + dt.timedelta(days=3650))
+                .sign(cle, hashes.SHA256()))
+        with open(KEY_FILE, "wb") as f:
+            f.write(cle.private_bytes(serialization.Encoding.PEM,
+                     serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
+        with open(CERT_FILE, "wb") as f:
+            f.write(cert.public_bytes(serialization.Encoding.PEM))
+        print("✅ Certificat TLS auto-signe genere.")
+    except Exception as e:
+        print(f"⚠️  Impossible de generer le certificat TLS: {e}")
 
 PAYS = {
     "1": ("Cote d'Ivoire", "+225"),
@@ -64,7 +100,16 @@ def init_firebase():
 # ══════════════════════════════════════════════════════════
 #  UTILITAIRES
 # ══════════════════════════════════════════════════════════
-def hacher(s):    return hashlib.sha256(s.encode()).hexdigest()
+def hacher(s):    return bcrypt.hashpw(s.encode(), bcrypt.gensalt()).decode()
+def verifier_mdp(mdp, hash_stocke):
+    """Verifie un mot de passe. Compatible avec les anciens hash sha256
+    (comptes crees avant la migration bcrypt) qu'on remigre au vol."""
+    if not hash_stocke: return False
+    if hash_stocke.startswith("$2b$") or hash_stocke.startswith("$2a$"):
+        try: return bcrypt.checkpw(mdp.encode(), hash_stocke.encode())
+        except Exception: return False
+    # ancien format sha256 (64 caracteres hexa)
+    return hash_stocke == hashlib.sha256(mdp.encode()).hexdigest()
 def horodatage(): return datetime.datetime.now().isoformat()
 def heure():      return datetime.datetime.now().strftime("%H:%M")
 
@@ -260,6 +305,35 @@ admins_connectes = set()
 lock             = threading.Lock()
 TIMEOUT          = 1800
 
+# ── Anti-bruteforce ──────────────────────────────────────────
+tentatives_echec = {}   # cle (ex: "login_ip") -> [nb_echecs, timestamp_dernier_echec]
+MAX_TENTATIVES   = 5
+BLOCAGE_SECONDES = 300  # 5 minutes
+
+def bloque(cle):
+    """True si cette cle a depasse le nombre d'echecs autorises recemment."""
+    with lock:
+        nb, t = tentatives_echec.get(cle, [0, 0])
+        if nb >= MAX_TENTATIVES and time.time() - t < BLOCAGE_SECONDES:
+            return True
+        if nb >= MAX_TENTATIVES:
+            tentatives_echec[cle] = [0, 0]  # blocage expire, on reinitialise
+        return False
+
+def signaler_echec(cle):
+    with lock:
+        nb, _ = tentatives_echec.get(cle, [0, 0])
+        tentatives_echec[cle] = [nb + 1, time.time()]
+
+def signaler_succes(cle):
+    with lock:
+        tentatives_echec.pop(cle, None)
+
+def temps_restant(cle):
+    with lock:
+        nb, t = tentatives_echec.get(cle, [0, 0])
+        return max(0, int(BLOCAGE_SECONDES - (time.time() - t)))
+
 def envoyer_srv(sock, paquet):
     try: sock.sendall((json.dumps(paquet, ensure_ascii=False) + "\n").encode())
     except Exception: pass
@@ -355,25 +429,41 @@ def gerer_client(conn, addr):
 
                 # ─── CONNEXION (nom) ──────────────────────
                 elif act == "connecter":
+                    ip = addr[0]; cle_bf = f"login_{ip}"
+                    if bloque(cle_bf):
+                        envoyer_srv(conn, {"ok":False,"msg":f"Trop de tentatives. Reessaie dans {temps_restant(cle_bf)}s."})
+                        continue
                     nom = p.get("nom","").strip(); mdp = p.get("mdp","").strip()
                     candidats = fs_get_user_by_nom(nom)
-                    match = next(((k,u) for k,u in candidats if u.get("mdp")==hacher(mdp)), None)
+                    match = next(((k,u) for k,u in candidats if verifier_mdp(mdp, u.get("mdp"))), None)
                     if not match:
+                        signaler_echec(cle_bf)
                         if len(candidats)>1:
                             envoyer_srv(conn, {"ok":False,"msg":"Plusieurs comptes avec ce nom. Connecte-toi avec ton numero.","utiliser_numero":True})
                         else:
                             envoyer_srv(conn, {"ok":False,"msg":"Nom ou mot de passe incorrect."})
                     else:
+                        signaler_succes(cle_bf)
                         uid, user = match
+                        if not user.get("mdp","").startswith(("$2b$","$2a$")):
+                            fs_update_user(uid, {"mdp": hacher(mdp)})  # remigration bcrypt au vol
                         num_co, est_admin = _connecter_user(conn, user, uid)
 
                 # ─── CONNEXION (numéro) ───────────────────
                 elif act == "connecter_numero":
+                    ip = addr[0]; cle_bf = f"login_{ip}"
+                    if bloque(cle_bf):
+                        envoyer_srv(conn, {"ok":False,"msg":f"Trop de tentatives. Reessaie dans {temps_restant(cle_bf)}s."})
+                        continue
                     numero = p.get("numero","").strip(); mdp = p.get("mdp","").strip()
                     uid, user = fs_get_user_by_numero(numero)
-                    if not user or user.get("mdp") != hacher(mdp):
+                    if not user or not verifier_mdp(mdp, user.get("mdp")):
+                        signaler_echec(cle_bf)
                         envoyer_srv(conn, {"ok":False,"msg":"Numero ou mot de passe incorrect."})
                     else:
+                        signaler_succes(cle_bf)
+                        if not user.get("mdp","").startswith(("$2b$","$2a$")):
+                            fs_update_user(uid, {"mdp": hacher(mdp)})  # remigration bcrypt au vol
                         num_co, est_admin = _connecter_user(conn, user, uid)
 
                 # ─── DÉCONNEXION ──────────────────────────
@@ -387,7 +477,11 @@ def gerer_client(conn, addr):
                         _, user = fs_get_user_by_numero(num_co)
                         if user: livrer(dest, {"type":"typing","de":user["nom"],"numero":num_co,"actif":p.get("actif",True)})
 
-                # ─── CHERCHER ─────────────────────────────
+                # ─── VERIFIER NUMERO (usage interne uniquement) ──
+                # Utilise seulement pour confirmer qu'un contact existe avant
+                # de demarrer une conversation ou d'envoyer un fichier.
+                # Ne renvoie plus le profil complet (bio/pays/derniere connexion)
+                # pour empecher la recherche/collecte d'infos sur des inconnus.
                 elif act == "chercher":
                     if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
                     else:
@@ -396,13 +490,10 @@ def gerer_client(conn, addr):
                         if not trouve: envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
                         else:
                             en_ligne = numero in clients
-                            dc = trouve.get("derniere_connexion")
-                            if dc: dc = dc[:16].replace("T"," ")
                             envoyer_srv(conn, {"ok":True,"user":{
                                 "nom":trouve["nom"],"numero":trouve["numero"],
-                                "pays":trouve.get("pays",""),"bio":trouve.get("bio",""),
                                 "statut":trouve.get("statut","disponible"),
-                                "en_ligne":en_ligne,"derniere_connexion":dc if not en_ligne else None}})
+                                "en_ligne":en_ligne}})
 
                 # ─── CONVERSATIONS ─────────────────────────
                 elif act == "mes_conversations":
@@ -570,7 +661,7 @@ def gerer_client(conn, addr):
                         ancien = p.get("ancien","").strip(); nouveau = p.get("nouveau","").strip()
                         uid, user = fs_get_user_by_numero(num_co)
                         if len(nouveau)<4: envoyer_srv(conn, {"ok":False,"msg":"Min 4 caracteres."})
-                        elif not uid or user.get("mdp") != hacher(ancien): envoyer_srv(conn, {"ok":False,"msg":"Ancien mot de passe incorrect."})
+                        elif not uid or not verifier_mdp(ancien, user.get("mdp")): envoyer_srv(conn, {"ok":False,"msg":"Ancien mot de passe incorrect."})
                         else: fs_update_user(uid, {"mdp":hacher(nouveau)}); envoyer_srv(conn, {"ok":True,"msg":"Mot de passe change!"})
 
                 elif act == "supprimer_compte":
@@ -578,7 +669,7 @@ def gerer_client(conn, addr):
                     else:
                         mdp = p.get("mdp","").strip()
                         uid, user = fs_get_user_by_numero(num_co)
-                        if not uid or user.get("mdp") != hacher(mdp): envoyer_srv(conn, {"ok":False,"msg":"Mot de passe incorrect."})
+                        if not uid or not verifier_mdp(mdp, user.get("mdp")): envoyer_srv(conn, {"ok":False,"msg":"Mot de passe incorrect."})
                         else: fs_delete_user(uid); envoyer_srv(conn, {"ok":True,"msg":"Compte supprime."}); num_co = None
 
                 # ─── PIN ──────────────────────────────────
@@ -597,11 +688,15 @@ def gerer_client(conn, addr):
 
                 elif act == "verifier_pin":
                     if num_co:
+                        cle_bf = f"pin_{num_co}"
+                        if bloque(cle_bf):
+                            envoyer_srv(conn, {"ok":False,"msg":f"Trop de tentatives. Reessaie dans {temps_restant(cle_bf)}s."})
+                            continue
                         pin = p.get("pin","").strip()
                         _, user = fs_get_user_by_numero(num_co)
                         if not user or not user.get("pin"): envoyer_srv(conn, {"ok":True,"msg":"Pas de PIN defini."})
-                        elif user["pin"]==hacher(pin): envoyer_srv(conn, {"ok":True,"msg":"PIN correct."})
-                        else: envoyer_srv(conn, {"ok":False,"msg":"PIN incorrect."})
+                        elif verifier_mdp(pin, user["pin"]): signaler_succes(cle_bf); envoyer_srv(conn, {"ok":True,"msg":"PIN correct."})
+                        else: signaler_echec(cle_bf); envoyer_srv(conn, {"ok":False,"msg":"PIN incorrect."})
 
                 # ─── FICHIER ──────────────────────────────
                 elif act == "envoyer_fichier":
@@ -732,12 +827,19 @@ def gerer_client(conn, addr):
 
                 # ─── ADMIN ────────────────────────────────
                 elif act == "admin_login":
+                    ip = addr[0]; cle_bf = f"admin_{ip}"
+                    if bloque(cle_bf):
+                        envoyer_srv(conn, {"ok":False,"msg":f"Trop de tentatives. Reessaie dans {temps_restant(cle_bf)}s."})
+                        continue
                     if p.get("code","") == ADMIN_CODE:
+                        signaler_succes(cle_bf)
                         est_admin = True
                         if num_co:
                             with lock: admins_connectes.add(num_co)
                         envoyer_srv(conn, {"ok":True,"msg":"Acces admin accorde."})
-                    else: envoyer_srv(conn, {"ok":False,"msg":"Code incorrect."})
+                    else:
+                        signaler_echec(cle_bf)
+                        envoyer_srv(conn, {"ok":False,"msg":"Code incorrect."})
 
                 elif act == "admin_stats":
                     if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
@@ -802,15 +904,35 @@ def main():
     print("║  by Aboudev Labs 🇨🇮                     ║")
     print("╚══════════════════════════════════════════╝")
     init_firebase()
+    preparer_certificat_tls()
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("0.0.0.0", PORT)); srv.listen(200)
-    print(f"✅ TCP port {PORT}")
+
+    ctx = None
+    if os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
+        try:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(CERT_FILE, KEY_FILE)
+            print(f"✅ TCP+TLS port {PORT}")
+        except Exception as e:
+            ctx = None
+            print(f"⚠️  TLS desactive ({e}) — trafic EN CLAIR!")
+    else:
+        print(f"⚠️  Pas de certificat TLS — trafic EN CLAIR! (port {PORT})")
+
     def quitter(sig, frame): srv.close(); sys.exit(0)
     signal.signal(signal.SIGINT, quitter); signal.signal(signal.SIGTERM, quitter)
     while True:
         try:
             conn, addr = srv.accept()
+            if ctx:
+                try: conn = ctx.wrap_socket(conn, server_side=True)
+                except Exception as e:
+                    print(f"⚠️  Poignee de main TLS echouee avec {addr}: {e}")
+                    try: conn.close()
+                    except Exception: pass
+                    continue
             threading.Thread(target=gerer_client, args=(conn, addr), daemon=True).start()
         except Exception: break
 
