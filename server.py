@@ -1,0 +1,817 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+TermChat v6.0 — Serveur
+by Aboudev Labs CI
+Base de donnees : Firebase Firestore (donnees permanentes)
+"""
+
+import socket, threading, json, os, random, hashlib
+import datetime, time, base64, signal, sys
+
+# Firebase Admin SDK
+try:
+    import firebase_admin
+    from firebase_admin import credentials, firestore
+    FIREBASE_OK = True
+except ImportError:
+    FIREBASE_OK = False
+    print("⚠️  firebase-admin non installe — pip install firebase-admin")
+
+# ══════════════════════════════════════════════════════════
+#  CONFIG
+# ══════════════════════════════════════════════════════════
+PORT       = int(os.environ.get("PORT", 9999))
+ADMIN_CODE = os.environ.get("ADMIN_CODE", "aboudev2025")
+FIREBASE_CREDS = os.environ.get("FIREBASE_CREDS", "")  # JSON string
+
+PAYS = {
+    "1": ("Cote d'Ivoire", "+225"),
+    "2": ("Senegal",       "+221"),
+    "3": ("Guinee",        "+224"),
+    "4": ("Burkina Faso",  "+226"),
+    "5": ("Ghana",         "+233"),
+}
+STATUTS = ["disponible", "occupe", "ne_pas_deranger", "absent"]
+
+# ══════════════════════════════════════════════════════════
+#  FIREBASE FIRESTORE
+# ══════════════════════════════════════════════════════════
+db = None
+
+def init_firebase():
+    global db
+    if not FIREBASE_OK:
+        print("⚠️  Firebase non disponible")
+        return False
+    try:
+        if FIREBASE_CREDS:
+            creds_dict = json.loads(FIREBASE_CREDS)
+            cred = credentials.Certificate(creds_dict)
+        elif os.path.exists("firebase-credentials.json"):
+            cred = credentials.Certificate("firebase-credentials.json")
+        else:
+            print("⚠️  Pas de credentials Firebase")
+            return False
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        print("✅ Firebase Firestore connecte!")
+        return True
+    except Exception as e:
+        print(f"⚠️  Firebase erreur: {e}")
+        return False
+
+# ══════════════════════════════════════════════════════════
+#  UTILITAIRES
+# ══════════════════════════════════════════════════════════
+def hacher(s):    return hashlib.sha256(s.encode()).hexdigest()
+def horodatage(): return datetime.datetime.now().isoformat()
+def heure():      return datetime.datetime.now().strftime("%H:%M")
+
+def gen_numero(prefixe):
+    if db:
+        users = db.collection("users").where("prefixe", "==", prefixe).stream()
+        nums  = {u.to_dict().get("numero","") for u in users}
+    else:
+        nums = set()
+    while True:
+        n = prefixe + str(random.randint(1000000000, 9999999999))
+        if n not in nums:
+            return n
+
+# ══════════════════════════════════════════════════════════
+#  OPÉRATIONS FIRESTORE
+# ══════════════════════════════════════════════════════════
+def fs_get_user_by_numero(numero):
+    if not db: return None, None
+    try:
+        docs = db.collection("users").where("numero", "==", numero).limit(1).stream()
+        for doc in docs:
+            return doc.id, doc.to_dict()
+        return None, None
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return None, None
+
+def fs_get_user_by_nom(nom):
+    if not db: return []
+    try:
+        docs = db.collection("users").where("nom_lower", "==", nom.lower()).stream()
+        return [(doc.id, doc.to_dict()) for doc in docs]
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return []
+
+def fs_save_user(uid, data):
+    if not db: return
+    try: db.collection("users").document(uid).set(data)
+    except Exception as e: print(f"Firestore erreur: {e}")
+
+def fs_update_user(uid, fields):
+    if not db: return
+    try: db.collection("users").document(uid).update(fields)
+    except Exception as e: print(f"Firestore erreur: {e}")
+
+def fs_delete_user(uid):
+    if not db: return
+    try: db.collection("users").document(uid).delete()
+    except Exception as e: print(f"Firestore erreur: {e}")
+
+def fs_save_message(cle_conv, msg):
+    if not db: return
+    try:
+        db.collection("historique").document(cle_conv)\
+          .collection("messages").document(msg["id"]).set(msg)
+        db.collection("historique").document(cle_conv)\
+          .set({"derniere_activite": horodatage(), "participants": cle_conv.split("_")}, merge=True)
+    except Exception as e: print(f"Firestore erreur: {e}")
+
+def fs_get_messages(n1, n2, limite=50):
+    if not db: return []
+    try:
+        cle = "_".join(sorted([n1, n2]))
+        docs = db.collection("historique").document(cle)\
+                 .collection("messages")\
+                 .order_by("heure", direction=firestore.Query.DESCENDING)\
+                 .limit(limite).stream()
+        msgs = [doc.to_dict() for doc in docs]
+        msgs.reverse()
+        now = time.time()
+        return [m for m in msgs if not m.get("expire_a") or m["expire_a"] > now]
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return []
+
+def fs_marquer_lus(dest, exp):
+    if not db: return
+    try:
+        cle  = "_".join(sorted([dest, exp]))
+        docs = db.collection("historique").document(cle)\
+                 .collection("messages")\
+                 .where("vers", "==", dest)\
+                 .where("lu", "==", False).stream()
+        batch = db.batch()
+        for doc in docs:
+            batch.update(doc.reference, {"lu": True})
+        batch.commit()
+    except Exception as e: print(f"Firestore erreur: {e}")
+
+def fs_compter_non_lus(numero):
+    if not db: return 0
+    try:
+        count = 0
+        convs = db.collection("historique")\
+                  .where("participants", "array_contains", numero).stream()
+        for conv in convs:
+            msgs = db.collection("historique").document(conv.id)\
+                     .collection("messages")\
+                     .where("vers", "==", numero)\
+                     .where("lu", "==", False).stream()
+            count += sum(1 for _ in msgs)
+        return count
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return 0
+
+def fs_get_conversations(numero):
+    if not db: return []
+    try:
+        convs_ref = db.collection("historique")\
+                      .where("participants", "array_contains", numero)\
+                      .order_by("derniere_activite", direction=firestore.Query.DESCENDING)\
+                      .limit(20).stream()
+        result = []
+        for conv in convs_ref:
+            cid   = conv.id
+            parts = cid.split("_")
+            autre = next((p for p in parts if p != numero), None)
+            if not autre: continue
+            _, autre_user = fs_get_user_by_numero(autre)
+            if not autre_user: continue
+            msgs = db.collection("historique").document(cid)\
+                     .collection("messages")\
+                     .order_by("heure", direction=firestore.Query.DESCENDING)\
+                     .limit(1).stream()
+            dernier_msg = ""
+            for m in msgs: dernier_msg = m.to_dict().get("texte","")[:40]
+            non_lus = 0
+            msgs_nl = db.collection("historique").document(cid)\
+                        .collection("messages")\
+                        .where("vers","==",numero)\
+                        .where("lu","==",False).stream()
+            for _ in msgs_nl: non_lus += 1
+            result.append({
+                "numero": autre, "nom": autre_user.get("nom","?"),
+                "dernier_msg": dernier_msg, "non_lus": non_lus,
+                "heure": conv.to_dict().get("derniere_activite","")[:16].replace("T"," ")
+            })
+        return result
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return []
+
+def fs_save_groupe(gid, data):
+    if not db: return
+    try: db.collection("groupes").document(gid).set(data, merge=True)
+    except Exception as e: print(f"Firestore erreur: {e}")
+
+def fs_get_groupe(gid):
+    if not db: return None
+    try:
+        doc = db.collection("groupes").document(gid).get()
+        return doc.to_dict() if doc.exists else None
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return None
+
+def fs_mes_groupes(numero):
+    if not db: return []
+    try:
+        docs = db.collection("groupes")\
+                 .where("membres", "array_contains", numero).stream()
+        return [(doc.id, doc.to_dict()) for doc in docs]
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return []
+
+def fs_save_msg_groupe(gid, msg):
+    if not db: return
+    try:
+        db.collection("groupes").document(gid)\
+          .collection("messages").add(msg)
+        db.collection("groupes").document(gid)\
+          .update({"derniere_activite": horodatage()})
+    except Exception as e: print(f"Firestore erreur: {e}")
+
+def fs_get_stats():
+    if not db: return {}
+    try:
+        nb_users  = sum(1 for _ in db.collection("users").stream())
+        nb_convs  = sum(1 for _ in db.collection("historique").stream())
+        nb_groupes= sum(1 for _ in db.collection("groupes").stream())
+        return {"utilisateurs": nb_users, "conversations": nb_convs, "groupes": nb_groupes}
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return {}
+
+# ══════════════════════════════════════════════════════════
+#  FICHIERS LOCAUX (temporaires)
+# ══════════════════════════════════════════════════════════
+FILES_DIR = os.path.join(os.path.expanduser("~"), ".termchat_files")
+os.makedirs(FILES_DIR, exist_ok=True)
+
+# ══════════════════════════════════════════════════════════
+#  CLIENTS CONNECTÉS
+# ══════════════════════════════════════════════════════════
+clients          = {}   # numero -> socket
+admins_connectes = set()
+lock             = threading.Lock()
+TIMEOUT          = 1800
+
+def envoyer_srv(sock, paquet):
+    try: sock.sendall((json.dumps(paquet, ensure_ascii=False) + "\n").encode())
+    except Exception: pass
+
+def livrer(numero, paquet):
+    with lock: s = clients.get(numero)
+    if s: envoyer_srv(s, paquet); return True
+    return False
+
+def notifier_statut(numero, en_ligne):
+    uid, user = fs_get_user_by_numero(numero)
+    if not user: return
+    with lock: cibles = list(clients.items())
+    for num, sock in cibles:
+        if num != numero:
+            envoyer_srv(sock, {"type": "statut", "numero": numero,
+                               "nom": user.get("nom","?"), "en_ligne": en_ligne})
+
+def _connecter_user(conn, user, uid):
+    """Finalise la connexion d'un utilisateur."""
+    num_co    = user["numero"]
+    est_admin = user.get("est_admin", False)
+    non_lus   = fs_compter_non_lus(num_co)
+
+    fs_update_user(uid, {"derniere_connexion": horodatage()})
+
+    with lock:
+        clients[num_co] = conn
+        if est_admin: admins_connectes.add(num_co)
+
+    envoyer_srv(conn, {
+        "ok": True, "nom": user["nom"], "numero": num_co,
+        "pays": user.get("pays",""), "bio": user.get("bio",""),
+        "couleur": user.get("couleur","cyan"),
+        "statut": user.get("statut","disponible"),
+        "est_admin": est_admin, "non_lus": non_lus,
+        "a_pin": bool(user.get("pin"))
+    })
+    notifier_statut(num_co, True)
+    return num_co, est_admin
+
+# ══════════════════════════════════════════════════════════
+#  GESTION D'UN CLIENT TCP
+# ══════════════════════════════════════════════════════════
+def gerer_client(conn, addr):
+    num_co    = None
+    buf       = ""
+    est_admin = False
+
+    try:
+        while True:
+            conn.settimeout(TIMEOUT)
+            try: chunk = conn.recv(8192).decode("utf-8", errors="replace")
+            except socket.timeout:
+                if num_co: envoyer_srv(conn, {"type":"timeout","msg":"Deconnecte pour inactivite."})
+                break
+            if not chunk: break
+            buf += chunk
+
+            while "\n" in buf:
+                ligne, buf = buf.split("\n", 1)
+                ligne = ligne.strip()
+                if not ligne: continue
+                try: p = json.loads(ligne)
+                except Exception: continue
+
+                act = p.get("action", "")
+
+                # ─── INSCRIPTION ──────────────────────────
+                if act == "inscrire":
+                    nom     = p.get("nom","").strip()
+                    mdp     = p.get("mdp","").strip()
+                    prefixe = p.get("prefixe","+225").strip()
+                    couleur = p.get("couleur","cyan")
+
+                    if not nom or len(nom)<2 or len(nom)>20:
+                        envoyer_srv(conn, {"ok":False,"msg":"Nom: 2 a 20 caracteres."})
+                    elif len(mdp)<4:
+                        envoyer_srv(conn, {"ok":False,"msg":"Mot de passe: minimum 4 caracteres."})
+                    else:
+                        numero = gen_numero(prefixe)
+                        pays   = next((v[0] for v in PAYS.values() if v[1]==prefixe), "Inconnu")
+                        uid    = f"u_{int(time.time())}_{random.randint(1000,9999)}"
+                        user_data = {
+                            "nom": nom, "nom_lower": nom.lower(), "numero": numero,
+                            "mdp": hacher(mdp), "pays": pays, "prefixe": prefixe,
+                            "bio": "", "couleur": couleur, "statut": "disponible",
+                            "inscription": horodatage(), "derniere_connexion": None,
+                            "favoris": [], "bloque": [], "est_admin": False, "pin": None
+                        }
+                        fs_save_user(uid, user_data)
+                        envoyer_srv(conn, {"ok":True,"numero":numero,"nom":nom,"pays":pays})
+
+                # ─── CONNEXION (nom) ──────────────────────
+                elif act == "connecter":
+                    nom = p.get("nom","").strip(); mdp = p.get("mdp","").strip()
+                    candidats = fs_get_user_by_nom(nom)
+                    match = next(((k,u) for k,u in candidats if u.get("mdp")==hacher(mdp)), None)
+                    if not match:
+                        if len(candidats)>1:
+                            envoyer_srv(conn, {"ok":False,"msg":"Plusieurs comptes avec ce nom. Connecte-toi avec ton numero.","utiliser_numero":True})
+                        else:
+                            envoyer_srv(conn, {"ok":False,"msg":"Nom ou mot de passe incorrect."})
+                    else:
+                        uid, user = match
+                        num_co, est_admin = _connecter_user(conn, user, uid)
+
+                # ─── CONNEXION (numéro) ───────────────────
+                elif act == "connecter_numero":
+                    numero = p.get("numero","").strip(); mdp = p.get("mdp","").strip()
+                    uid, user = fs_get_user_by_numero(numero)
+                    if not user or user.get("mdp") != hacher(mdp):
+                        envoyer_srv(conn, {"ok":False,"msg":"Numero ou mot de passe incorrect."})
+                    else:
+                        num_co, est_admin = _connecter_user(conn, user, uid)
+
+                # ─── DÉCONNEXION ──────────────────────────
+                elif act == "deconnecter":
+                    break
+
+                # ─── TYPING ───────────────────────────────
+                elif act == "typing":
+                    if num_co:
+                        dest = p.get("dest","").strip()
+                        _, user = fs_get_user_by_numero(num_co)
+                        if user: livrer(dest, {"type":"typing","de":user["nom"],"numero":num_co,"actif":p.get("actif",True)})
+
+                # ─── CHERCHER ─────────────────────────────
+                elif act == "chercher":
+                    if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        numero = p.get("numero","").strip()
+                        _, trouve = fs_get_user_by_numero(numero)
+                        if not trouve: envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        else:
+                            en_ligne = numero in clients
+                            dc = trouve.get("derniere_connexion")
+                            if dc: dc = dc[:16].replace("T"," ")
+                            envoyer_srv(conn, {"ok":True,"user":{
+                                "nom":trouve["nom"],"numero":trouve["numero"],
+                                "pays":trouve.get("pays",""),"bio":trouve.get("bio",""),
+                                "statut":trouve.get("statut","disponible"),
+                                "en_ligne":en_ligne,"derniere_connexion":dc if not en_ligne else None}})
+
+                # ─── CONVERSATIONS ─────────────────────────
+                elif act == "mes_conversations":
+                    if num_co:
+                        convs = fs_get_conversations(num_co)
+                        envoyer_srv(conn, {"ok":True,"conversations":convs})
+
+                # ─── MESSAGE ──────────────────────────────
+                elif act == "message":
+                    if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        dest     = p.get("dest","").strip()
+                        texte    = p.get("texte","").strip()
+                        chiffre  = p.get("chiffre",False)
+                        reply_to = p.get("reply_to")
+                        expire_s = p.get("expire_secondes")
+
+                        if not texte or not dest:
+                            envoyer_srv(conn, {"ok":False,"msg":"Message ou destinataire vide."})
+                        else:
+                            _, exp_user  = fs_get_user_by_numero(num_co)
+                            _, dest_user = fs_get_user_by_numero(dest)
+                            if not dest_user:
+                                envoyer_srv(conn, {"ok":False,"msg":"Destinataire introuvable."})
+                            elif num_co in dest_user.get("bloque",[]):
+                                envoyer_srv(conn, {"ok":False,"msg":"Tu es bloque par cet utilisateur."})
+                            else:
+                                cle    = "_".join(sorted([num_co, dest]))
+                                msg_id = f"{int(time.time())}_{random.randint(1000,9999)}"
+                                msg = {
+                                    "id":msg_id,"de":num_co,"vers":dest,"texte":texte,
+                                    "type":"texte","heure":horodatage(),"lu":False,
+                                    "chiffre":chiffre,"reply_to":reply_to
+                                }
+                                if expire_s: msg["expire_a"] = time.time()+int(expire_s)
+                                fs_save_message(cle, msg)
+                                nom_exp = exp_user["nom"] if exp_user else "?"
+                                livre = livrer(dest, {
+                                    "type":"message","de":nom_exp,"numero":num_co,
+                                    "texte":texte,"heure":heure(),"chiffre":chiffre,
+                                    "reply_to":reply_to,"msg_id":msg_id
+                                })
+                                envoyer_srv(conn, {"ok":True,"livre":livre,"msg_id":msg_id})
+                                if livre: livrer(num_co, {"type":"livre","dest":dest,"msg_id":msg_id})
+
+                # ─── RÉACTION ─────────────────────────────
+                elif act == "reaction":
+                    if num_co:
+                        dest  = p.get("dest","").strip(); msg_id = p.get("msg_id",""); emoji = p.get("emoji","👍")
+                        _, exp_user = fs_get_user_by_numero(num_co)
+                        livrer(dest, {"type":"reaction","de":exp_user["nom"] if exp_user else "?",
+                                      "numero":num_co,"msg_id":msg_id,"emoji":emoji,"heure":heure()})
+                        envoyer_srv(conn, {"ok":True})
+
+                # ─── MARQUER LU ───────────────────────────
+                elif act == "marquer_lu":
+                    if num_co:
+                        avec = p.get("avec","").strip()
+                        fs_marquer_lus(num_co, avec)
+                        livrer(avec, {"type":"lu","par":num_co})
+
+                # ─── HISTORIQUE ───────────────────────────
+                elif act == "historique":
+                    if num_co:
+                        avec  = p.get("avec","").strip()
+                        hist  = fs_get_messages(num_co, avec, p.get("limite",50))
+                        _, eu = fs_get_user_by_numero(num_co)
+                        _, au = fs_get_user_by_numero(avec)
+                        noms  = {}
+                        if eu: noms[num_co] = eu["nom"]
+                        if au: noms[avec]   = au["nom"]
+                        for m in hist: m["nom_de"] = noms.get(m["de"], m["de"])
+                        fs_marquer_lus(num_co, avec)
+                        livrer(avec, {"type":"lu","par":num_co})
+                        envoyer_srv(conn, {"ok":True,"historique":hist})
+
+                elif act == "rechercher_msg":
+                    if num_co:
+                        mot  = p.get("mot","").strip().lower()
+                        avec = p.get("avec","").strip()
+                        hist = fs_get_messages(num_co, avec, 200)
+                        res  = [m for m in hist if mot in m.get("texte","").lower()][-20:]
+                        envoyer_srv(conn, {"ok":True,"resultats":res,"total":len(res)})
+
+                elif act == "effacer_historique":
+                    if num_co:
+                        avec = p.get("avec","").strip()
+                        cle  = "_".join(sorted([num_co, avec]))
+                        if db:
+                            try:
+                                msgs = db.collection("historique").document(cle).collection("messages").stream()
+                                batch = db.batch()
+                                for m in msgs: batch.delete(m.reference)
+                                batch.commit()
+                            except Exception as e: print(f"Firestore erreur: {e}")
+                        envoyer_srv(conn, {"ok":True,"msg":"Historique efface."})
+
+                # ─── STATUT ───────────────────────────────
+                elif act == "changer_statut":
+                    if num_co:
+                        statut = p.get("statut","disponible")
+                        if statut not in STATUTS: statut = "disponible"
+                        uid, _ = fs_get_user_by_numero(num_co)
+                        if uid:
+                            fs_update_user(uid, {"statut": statut})
+                            with lock: cibles = list(clients.items())
+                            _, eu = fs_get_user_by_numero(num_co)
+                            for num, sock in cibles:
+                                if num != num_co:
+                                    envoyer_srv(sock, {"type":"statut_change","numero":num_co,
+                                                       "nom":eu["nom"] if eu else "?","statut":statut})
+                            envoyer_srv(conn, {"ok":True,"msg":f"Statut: {statut}"})
+
+                # ─── FAVORIS ──────────────────────────────
+                elif act == "ajouter_favori":
+                    if num_co:
+                        cible = p.get("numero","").strip()
+                        uid, user = fs_get_user_by_numero(num_co)
+                        if uid:
+                            favoris = user.get("favoris",[])
+                            if cible not in favoris: favoris.append(cible)
+                            fs_update_user(uid, {"favoris": favoris})
+                            envoyer_srv(conn, {"ok":True,"msg":"Ajoute aux favoris!"})
+
+                elif act == "mes_favoris":
+                    if num_co:
+                        _, user = fs_get_user_by_numero(num_co)
+                        favoris = user.get("favoris",[]) if user else []
+                        with lock: ens = set(clients.keys())
+                        result = []
+                        for n in favoris:
+                            _, u = fs_get_user_by_numero(n)
+                            if u: result.append({"nom":u["nom"],"numero":n,
+                                "statut":u.get("statut","disponible"),"en_ligne":n in ens})
+                        envoyer_srv(conn, {"ok":True,"favoris":result})
+
+                # ─── BLOQUER ──────────────────────────────
+                elif act == "bloquer":
+                    if num_co:
+                        cible  = p.get("numero","").strip(); action = p.get("bloquer",True)
+                        uid, user = fs_get_user_by_numero(num_co)
+                        if uid:
+                            bloque = user.get("bloque",[])
+                            if action and cible not in bloque: bloque.append(cible)
+                            elif not action and cible in bloque: bloque.remove(cible)
+                            fs_update_user(uid, {"bloque": bloque})
+                            envoyer_srv(conn, {"ok":True,"msg":"Bloque." if action else "Debloque."})
+
+                # ─── PROFIL ───────────────────────────────
+                elif act == "changer_couleur":
+                    if num_co:
+                        couleur = p.get("couleur","cyan")
+                        uid, _ = fs_get_user_by_numero(num_co)
+                        if uid: fs_update_user(uid, {"couleur":couleur}); envoyer_srv(conn, {"ok":True,"msg":"Couleur changee!","couleur":couleur})
+
+                elif act == "modifier_bio":
+                    if num_co:
+                        bio = p.get("bio","").strip()[:150]
+                        uid, _ = fs_get_user_by_numero(num_co)
+                        if uid: fs_update_user(uid, {"bio":bio}); envoyer_srv(conn, {"ok":True,"msg":"Bio mise a jour!"})
+
+                elif act == "changer_mdp":
+                    if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        ancien = p.get("ancien","").strip(); nouveau = p.get("nouveau","").strip()
+                        uid, user = fs_get_user_by_numero(num_co)
+                        if len(nouveau)<4: envoyer_srv(conn, {"ok":False,"msg":"Min 4 caracteres."})
+                        elif not uid or user.get("mdp") != hacher(ancien): envoyer_srv(conn, {"ok":False,"msg":"Ancien mot de passe incorrect."})
+                        else: fs_update_user(uid, {"mdp":hacher(nouveau)}); envoyer_srv(conn, {"ok":True,"msg":"Mot de passe change!"})
+
+                elif act == "supprimer_compte":
+                    if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        mdp = p.get("mdp","").strip()
+                        uid, user = fs_get_user_by_numero(num_co)
+                        if not uid or user.get("mdp") != hacher(mdp): envoyer_srv(conn, {"ok":False,"msg":"Mot de passe incorrect."})
+                        else: fs_delete_user(uid); envoyer_srv(conn, {"ok":True,"msg":"Compte supprime."}); num_co = None
+
+                # ─── PIN ──────────────────────────────────
+                elif act == "definir_pin":
+                    if num_co:
+                        pin = p.get("pin","").strip()
+                        if len(pin)!=4 or not pin.isdigit(): envoyer_srv(conn, {"ok":False,"msg":"Le PIN doit etre 4 chiffres."})
+                        else:
+                            uid, _ = fs_get_user_by_numero(num_co)
+                            if uid: fs_update_user(uid, {"pin":hacher(pin)}); envoyer_srv(conn, {"ok":True,"msg":"Code PIN active!"})
+
+                elif act == "supprimer_pin":
+                    if num_co:
+                        uid, _ = fs_get_user_by_numero(num_co)
+                        if uid: fs_update_user(uid, {"pin":None}); envoyer_srv(conn, {"ok":True,"msg":"Code PIN desactive."})
+
+                elif act == "verifier_pin":
+                    if num_co:
+                        pin = p.get("pin","").strip()
+                        _, user = fs_get_user_by_numero(num_co)
+                        if not user or not user.get("pin"): envoyer_srv(conn, {"ok":True,"msg":"Pas de PIN defini."})
+                        elif user["pin"]==hacher(pin): envoyer_srv(conn, {"ok":True,"msg":"PIN correct."})
+                        else: envoyer_srv(conn, {"ok":False,"msg":"PIN incorrect."})
+
+                # ─── FICHIER ──────────────────────────────
+                elif act == "envoyer_fichier":
+                    if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        dest=p.get("dest","").strip(); nom_fich=p.get("nom_fichier","fichier")
+                        c64=p.get("contenu",""); taille=p.get("taille",0)
+                        _, exp_user  = fs_get_user_by_numero(num_co)
+                        _, dest_user = fs_get_user_by_numero(dest)
+                        if taille>50*1024*1024: envoyer_srv(conn, {"ok":False,"msg":"Max 50 MB."})
+                        elif not dest_user: envoyer_srv(conn, {"ok":False,"msg":"Destinataire introuvable."})
+                        else:
+                            safe   = "".join(c for c in nom_fich if c.isalnum() or c in "._-") or "fichier"
+                            chemin = os.path.join(FILES_DIR, f"{int(time.time())}_{safe}")
+                            try:
+                                with open(chemin,"wb") as f: f.write(base64.b64decode(c64))
+                                cle    = "_".join(sorted([num_co, dest]))
+                                msg_id = f"{int(time.time())}_{random.randint(1000,9999)}"
+                                # On ne stocke pas le contenu base64 (trop volumineux pour Firestore),
+                                # seulement la reference au fichier, pour que l'historique fonctionne.
+                                msg = {
+                                    "id":msg_id,"de":num_co,"vers":dest,
+                                    "texte":nom_fich,"nom_fichier":safe,
+                                    "type":"fichier","heure":horodatage(),"lu":False,
+                                    "chiffre":False,"taille":taille
+                                }
+                                fs_save_message(cle, msg)
+                                livre = livrer(dest, {"type":"fichier","de":exp_user["nom"] if exp_user else "?",
+                                    "numero":num_co,"nom_fichier":nom_fich,"contenu":c64,"taille":taille,"heure":heure(),"msg_id":msg_id})
+                                envoyer_srv(conn, {"ok":True,"livre":livre,"msg_id":msg_id,"msg":f"'{nom_fich}' envoye."})
+                            except Exception as e: envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
+
+                # ─── VOCAL ────────────────────────────────
+                elif act == "envoyer_vocal":
+                    if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        dest=p.get("dest","").strip(); c64=p.get("contenu","")
+                        taille=p.get("taille",0); duree=p.get("duree",0)
+                        _, exp_user  = fs_get_user_by_numero(num_co)
+                        _, dest_user = fs_get_user_by_numero(dest)
+                        if taille>50*1024*1024: envoyer_srv(conn, {"ok":False,"msg":"Max 50 MB."})
+                        elif not dest_user: envoyer_srv(conn, {"ok":False,"msg":"Destinataire introuvable."})
+                        else:
+                            nom_fich=f"vocal_{int(time.time())}.ogg"; chemin=os.path.join(FILES_DIR,nom_fich)
+                            try:
+                                with open(chemin,"wb") as f: f.write(base64.b64decode(c64))
+                                cle    = "_".join(sorted([num_co, dest]))
+                                msg_id = f"{int(time.time())}_{random.randint(1000,9999)}"
+                                msg = {
+                                    "id":msg_id,"de":num_co,"vers":dest,
+                                    "texte":nom_fich,"nom_fichier":nom_fich,
+                                    "type":"vocal","heure":horodatage(),"lu":False,
+                                    "chiffre":False,"taille":taille,"duree":duree
+                                }
+                                fs_save_message(cle, msg)
+                                livre=livrer(dest, {"type":"vocal","de":exp_user["nom"] if exp_user else "?",
+                                    "numero":num_co,"nom_fichier":nom_fich,"contenu":c64,"duree":duree,"taille":taille,"heure":heure(),"msg_id":msg_id})
+                                envoyer_srv(conn, {"ok":True,"livre":livre,"msg_id":msg_id,"msg":"Vocal envoye!"})
+                            except Exception as e: envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
+
+                # ─── EN LIGNE ─────────────────────────────
+                elif act == "en_ligne":
+                    with lock: liste = list(clients.keys())
+                    result = []
+                    for n in liste:
+                        if n == num_co: continue
+                        _, u = fs_get_user_by_numero(n)
+                        if u: result.append({"numero":n,"nom":u["nom"],"statut":u.get("statut","disponible")})
+                    envoyer_srv(conn, {"ok":True,"users":result})
+
+                # ─── GROUPES ──────────────────────────────
+                elif act == "creer_groupe":
+                    if num_co:
+                        nom_g = p.get("nom","").strip()
+                        if nom_g:
+                            _, eu = fs_get_user_by_numero(num_co)
+                            gid  = f"grp_{int(time.time())}_{random.randint(1000,9999)}"
+                            fs_save_groupe(gid, {"nom":nom_g,"createur":num_co,"membres":[num_co],
+                                "creation":horodatage(),"epingle":None,"derniere_activite":horodatage()})
+                            envoyer_srv(conn, {"ok":True,"id_groupe":gid,"nom":nom_g})
+
+                elif act == "ajouter_groupe":
+                    if num_co:
+                        gid=p.get("id_groupe","").strip(); cible=p.get("numero","").strip()
+                        groupe = fs_get_groupe(gid)
+                        _, cible_user = fs_get_user_by_numero(cible)
+                        if not groupe: envoyer_srv(conn, {"ok":False,"msg":"Groupe introuvable."})
+                        elif groupe["createur"]!=num_co: envoyer_srv(conn, {"ok":False,"msg":"Seul le createur peut ajouter."})
+                        elif not cible_user: envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        elif cible in groupe.get("membres",[]): envoyer_srv(conn, {"ok":False,"msg":"Deja membre."})
+                        else:
+                            membres = groupe.get("membres",[])+[cible]
+                            if db: db.collection("groupes").document(gid).update({"membres":membres})
+                            livrer(cible, {"type":"invitation_groupe","groupe":groupe["nom"],"id_groupe":gid,"heure":heure()})
+                            envoyer_srv(conn, {"ok":True,"msg":"Membre ajoute!"})
+
+                elif act == "msg_groupe":
+                    if num_co:
+                        gid=p.get("id_groupe","").strip(); texte=p.get("texte","").strip(); reply=p.get("reply_to")
+                        groupe = fs_get_groupe(gid)
+                        if groupe and num_co in groupe.get("membres",[]) and texte:
+                            _, eu = fs_get_user_by_numero(num_co)
+                            msg  = {"de":num_co,"nom":eu["nom"] if eu else "?","texte":texte,"heure":horodatage(),"reply_to":reply}
+                            fs_save_msg_groupe(gid, msg)
+                            for m in groupe.get("membres",[]):
+                                if m!=num_co: livrer(m, {"type":"msg_groupe","groupe":groupe["nom"],"id_groupe":gid,
+                                    "de":eu["nom"] if eu else "?","numero":num_co,"texte":texte,"heure":heure(),"reply_to":reply})
+                            envoyer_srv(conn, {"ok":True})
+                        else: envoyer_srv(conn, {"ok":False,"msg":"Groupe introuvable ou non membre."})
+
+                elif act == "mes_groupes":
+                    if num_co:
+                        groupes = fs_mes_groupes(num_co)
+                        result  = [{"id":gid,"nom":g["nom"],"membres":len(g.get("membres",[])),"createur":g["createur"]==num_co}
+                                   for gid,g in groupes]
+                        envoyer_srv(conn, {"ok":True,"groupes":result})
+
+                elif act == "epingler_groupe":
+                    if num_co:
+                        gid=p.get("id_groupe","").strip(); texte=p.get("texte","").strip()
+                        groupe = fs_get_groupe(gid)
+                        if not groupe: envoyer_srv(conn, {"ok":False,"msg":"Groupe introuvable."})
+                        elif groupe["createur"]!=num_co: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                        else:
+                            if db: db.collection("groupes").document(gid).update({"epingle":texte})
+                            for m in groupe.get("membres",[]): livrer(m, {"type":"epingle","groupe":groupe["nom"],"texte":texte,"heure":heure()})
+                            envoyer_srv(conn, {"ok":True,"msg":"Message epingle!"})
+
+                # ─── ADMIN ────────────────────────────────
+                elif act == "admin_login":
+                    if p.get("code","") == ADMIN_CODE:
+                        est_admin = True
+                        if num_co:
+                            with lock: admins_connectes.add(num_co)
+                        envoyer_srv(conn, {"ok":True,"msg":"Acces admin accorde."})
+                    else: envoyer_srv(conn, {"ok":False,"msg":"Code incorrect."})
+
+                elif act == "admin_stats":
+                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else:
+                        stats = fs_get_stats()
+                        with lock: stats["en_ligne"] = len(clients)
+                        envoyer_srv(conn, {"ok":True,"stats":stats})
+
+                elif act == "admin_users":
+                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else:
+                        if db:
+                            try:
+                                with lock: ens = set(clients.keys())
+                                docs  = db.collection("users").stream()
+                                users = []
+                                for doc in docs:
+                                    u = doc.to_dict()
+                                    users.append({"nom":u["nom"],"numero":u["numero"],"pays":u.get("pays",""),
+                                        "inscription":(u.get("inscription") or "")[:10],
+                                        "en_ligne":u["numero"] in ens})
+                                envoyer_srv(conn, {"ok":True,"users":users})
+                            except Exception as e: envoyer_srv(conn, {"ok":False,"msg":str(e)})
+
+                elif act == "admin_broadcast":
+                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else:
+                        msg = p.get("msg","").strip()
+                        with lock: tous = list(clients.values())
+                        for s in tous: envoyer_srv(s, {"type":"annonce","msg":msg,"heure":heure()})
+                        envoyer_srv(conn, {"ok":True,"msg":f"Envoye a {len(tous)} utilisateurs."})
+
+                elif act == "admin_kick":
+                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else:
+                        cible = p.get("numero","").strip()
+                        with lock: s = clients.get(cible)
+                        if s:
+                            envoyer_srv(s, {"type":"kick","msg":"Deconnecte par l'administrateur."})
+                            try: s.close()
+                            except Exception: pass
+                            envoyer_srv(conn, {"ok":True,"msg":"Utilisateur deconnecte."})
+                        else: envoyer_srv(conn, {"ok":False,"msg":"Utilisateur hors ligne."})
+
+                else: envoyer_srv(conn, {"ok":False,"msg":f"Action inconnue: {act}"})
+
+    except Exception: pass
+    finally:
+        if num_co:
+            with lock: clients.pop(num_co,None); admins_connectes.discard(num_co)
+            try: notifier_statut(num_co, False)
+            except Exception: pass
+        try: conn.close()
+        except Exception: pass
+
+# ══════════════════════════════════════════════════════════
+#  DÉMARRAGE
+# ══════════════════════════════════════════════════════════
+def main():
+    print("╔══════════════════════════════════════════╗")
+    print("║  💬  TERMCHAT v6.0 — SERVEUR             ║")
+    print("║  by Aboudev Labs 🇨🇮                     ║")
+    print("╚══════════════════════════════════════════╝")
+    init_firebase()
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("0.0.0.0", PORT)); srv.listen(200)
+    print(f"✅ TCP port {PORT}")
+    def quitter(sig, frame): srv.close(); sys.exit(0)
+    signal.signal(signal.SIGINT, quitter); signal.signal(signal.SIGTERM, quitter)
+    while True:
+        try:
+            conn, addr = srv.accept()
+            threading.Thread(target=gerer_client, args=(conn, addr), daemon=True).start()
+        except Exception: break
+
+if __name__ == "__main__": main()
