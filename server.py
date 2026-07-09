@@ -898,6 +898,23 @@ def gerer_client(conn, addr):
 # ══════════════════════════════════════════════════════════
 #  DÉMARRAGE
 # ══════════════════════════════════════════════════════════
+def gerer_client_tls(conn, addr, ctx):
+    """Fait le handshake TLS dans le thread du client (pas dans la boucle
+    d'acceptation principale), avec un timeout court. Ainsi, une connexion
+    qui ne complete jamais le handshake (ex: sonde de sante Railway qui se
+    contente d'ouvrir/fermer le TCP sans TLS) ne bloque jamais l'acceptation
+    des autres clients ni ne fait planter le serveur."""
+    try:
+        conn.settimeout(8)
+        conn = ctx.wrap_socket(conn, server_side=True)
+        conn.settimeout(None)
+    except Exception as e:
+        print(f"⚠️  Poignee de main TLS echouee avec {addr}: {e}")
+        try: conn.close()
+        except Exception: pass
+        return
+    gerer_client(conn, addr)
+
 def main():
     print("╔══════════════════════════════════════════╗")
     print("║  💬  TERMCHAT v6.0 — SERVEUR             ║")
@@ -927,13 +944,11 @@ def main():
         try:
             conn, addr = srv.accept()
             if ctx:
-                try: conn = ctx.wrap_socket(conn, server_side=True)
-                except Exception as e:
-                    print(f"⚠️  Poignee de main TLS echouee avec {addr}: {e}")
-                    try: conn.close()
-                    except Exception: pass
-                    continue
-            threading.Thread(target=gerer_client, args=(conn, addr), daemon=True).start()
-        except Exception: break
+                threading.Thread(target=gerer_client_tls, args=(conn, addr, ctx), daemon=True).start()
+            else:
+                threading.Thread(target=gerer_client, args=(conn, addr), daemon=True).start()
+        except Exception as e:
+            print(f"⚠️  Erreur boucle accept (ignoree, on continue): {e}")
+            continue
 
 if __name__ == "__main__": main()
