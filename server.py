@@ -6,7 +6,7 @@ by Aboudev Labs CI
 Base de donnees : Firebase Firestore (donnees permanentes)
 """
 
-import socket, threading, json, os, random, hashlib
+import socket, threading, json, os, random, hashlib, re
 import datetime, time, base64, signal, sys, ssl
 import bcrypt
 
@@ -144,6 +144,26 @@ def fs_get_user_by_nom(nom):
         return [(doc.id, doc.to_dict()) for doc in docs]
     except Exception as e:
         print(f"Firestore erreur: {e}"); return []
+
+def fs_get_user_by_pseudo(pseudo):
+    if not db: return None, None
+    try:
+        docs = db.collection("users").where("pseudo_lower", "==", pseudo.lower().lstrip("@")).limit(1).stream()
+        for doc in docs:
+            return doc.id, doc.to_dict()
+        return None, None
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return None, None
+
+def fs_get_user_by_email(email):
+    if not db: return None, None
+    try:
+        docs = db.collection("users").where("email_lower", "==", email.lower()).limit(1).stream()
+        for doc in docs:
+            return doc.id, doc.to_dict()
+        return None, None
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return None, None
 
 def fs_save_user(uid, data):
     if not db: return
@@ -408,24 +428,39 @@ def gerer_client(conn, addr):
                     mdp     = p.get("mdp","").strip()
                     prefixe = p.get("prefixe","+225").strip()
                     couleur = p.get("couleur","cyan")
+                    pseudo  = p.get("pseudo","").strip().lstrip("@")
+                    email   = p.get("email","").strip()
+
+                    RE_PSEUDO = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{2,19}$")
+                    RE_EMAIL  = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
                     if not nom or len(nom)<2 or len(nom)>20:
                         envoyer_srv(conn, {"ok":False,"msg":"Nom: 2 a 20 caracteres."})
                     elif len(mdp)<4:
                         envoyer_srv(conn, {"ok":False,"msg":"Mot de passe: minimum 4 caracteres."})
+                    elif not RE_PSEUDO.match(pseudo):
+                        envoyer_srv(conn, {"ok":False,"msg":"Pseudo invalide: 3-20 caracteres, doit commencer par une lettre, lettres/chiffres/underscore uniquement."})
+                    elif email and not RE_EMAIL.match(email):
+                        envoyer_srv(conn, {"ok":False,"msg":"Format d'email invalide."})
+                    elif fs_get_user_by_pseudo(pseudo)[1] is not None:
+                        envoyer_srv(conn, {"ok":False,"msg":f"Le pseudo @{pseudo} est deja pris."})
+                    elif email and fs_get_user_by_email(email)[1] is not None:
+                        envoyer_srv(conn, {"ok":False,"msg":"Cet email est deja associe a un compte."})
                     else:
                         numero = gen_numero(prefixe)
                         pays   = next((v[0] for v in PAYS.values() if v[1]==prefixe), "Inconnu")
                         uid    = f"u_{int(time.time())}_{random.randint(1000,9999)}"
                         user_data = {
                             "nom": nom, "nom_lower": nom.lower(), "numero": numero,
+                            "pseudo": pseudo, "pseudo_lower": pseudo.lower(),
+                            "email": email, "email_lower": email.lower() if email else None,
                             "mdp": hacher(mdp), "pays": pays, "prefixe": prefixe,
                             "bio": "", "couleur": couleur, "statut": "disponible",
                             "inscription": horodatage(), "derniere_connexion": None,
                             "favoris": [], "bloque": [], "est_admin": False, "pin": None
                         }
                         fs_save_user(uid, user_data)
-                        envoyer_srv(conn, {"ok":True,"numero":numero,"nom":nom,"pays":pays})
+                        envoyer_srv(conn, {"ok":True,"numero":numero,"nom":nom,"pays":pays,"pseudo":pseudo})
 
                 # ─── CONNEXION (nom) ──────────────────────
                 elif act == "connecter":
@@ -466,6 +501,23 @@ def gerer_client(conn, addr):
                             fs_update_user(uid, {"mdp": hacher(mdp)})  # remigration bcrypt au vol
                         num_co, est_admin = _connecter_user(conn, user, uid)
 
+                # ─── CONNEXION (email) ─────────────────────
+                elif act == "connecter_email":
+                    ip = addr[0]; cle_bf = f"login_{ip}"
+                    if bloque(cle_bf):
+                        envoyer_srv(conn, {"ok":False,"msg":f"Trop de tentatives. Reessaie dans {temps_restant(cle_bf)}s."})
+                        continue
+                    email = p.get("email","").strip(); mdp = p.get("mdp","").strip()
+                    uid, user = fs_get_user_by_email(email)
+                    if not user or not verifier_mdp(mdp, user.get("mdp")):
+                        signaler_echec(cle_bf)
+                        envoyer_srv(conn, {"ok":False,"msg":"Email ou mot de passe incorrect."})
+                    else:
+                        signaler_succes(cle_bf)
+                        if not user.get("mdp","").startswith(("$2b$","$2a$")):
+                            fs_update_user(uid, {"mdp": hacher(mdp)})  # remigration bcrypt au vol
+                        num_co, est_admin = _connecter_user(conn, user, uid)
+
                 # ─── DÉCONNEXION ──────────────────────────
                 elif act == "deconnecter":
                     break
@@ -477,21 +529,28 @@ def gerer_client(conn, addr):
                         _, user = fs_get_user_by_numero(num_co)
                         if user: livrer(dest, {"type":"typing","de":user["nom"],"numero":num_co,"actif":p.get("actif",True)})
 
-                # ─── VERIFIER NUMERO (usage interne uniquement) ──
+                # ─── VERIFIER NUMERO / PSEUDO (usage interne uniquement) ──
                 # Utilise seulement pour confirmer qu'un contact existe avant
                 # de demarrer une conversation ou d'envoyer un fichier.
                 # Ne renvoie plus le profil complet (bio/pays/derniere connexion)
                 # pour empecher la recherche/collecte d'infos sur des inconnus.
+                # Correspondance EXACTE uniquement (pas de recherche partielle/
+                # navigation dans l'annuaire des utilisateurs).
                 elif act == "chercher":
                     if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
                     else:
+                        pseudo = p.get("pseudo","").strip()
                         numero = p.get("numero","").strip()
-                        _, trouve = fs_get_user_by_numero(numero)
+                        if pseudo:
+                            _, trouve = fs_get_user_by_pseudo(pseudo)
+                        else:
+                            _, trouve = fs_get_user_by_numero(numero)
                         if not trouve: envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
                         else:
-                            en_ligne = numero in clients
+                            en_ligne = trouve["numero"] in clients
                             envoyer_srv(conn, {"ok":True,"user":{
                                 "nom":trouve["nom"],"numero":trouve["numero"],
+                                "pseudo":trouve.get("pseudo",""),
                                 "statut":trouve.get("statut","disponible"),
                                 "en_ligne":en_ligne}})
 

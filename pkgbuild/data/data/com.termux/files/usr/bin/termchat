@@ -173,7 +173,6 @@ def menu_accueil():
     print(f"  {C2}1{Z} — 🆕  Creer un compte")
     print(f"  {C2}2{Z} — 🔑  Se connecter")
     print(f"  {C2}3{Z} — 📱  Se connecter par numero")
-    print(f"  {C2}4{Z} — 📧  Se connecter par email")
     print(f"  {C2}q{Z} — 🚪  Quitter\n")
     return input(f"{J}Choix: {Z}").strip().lower()
 
@@ -203,9 +202,6 @@ def inscrire():
     titre("🆕 CREER UN COMPTE")
     nom=input("Ton nom (2-20 car.): ").strip()
     if not nom: erreur("Nom requis."); entree(); return
-    pseudo=input("Choisis un pseudo unique @ (3-20 car., lettre puis lettres/chiffres/_): ").strip().lstrip("@")
-    if not pseudo: erreur("Pseudo requis."); entree(); return
-    email=input("Email (optionnel, pour te connecter aussi par email - Entree pour passer): ").strip()
     mdp=input("Mot de passe (min 4): ").strip()
     if not mdp: erreur("Mot de passe requis."); entree(); return
     mdp2=input("Confirmer: ").strip()
@@ -215,20 +211,19 @@ def inscrire():
     choix_pays=input("\nNumero du pays: ").strip()
     if choix_pays not in PAYS: choix_pays="1"
     _,prefixe=PAYS[choix_pays]
-    envoyer_cli({"action":"inscrire","nom":nom,"mdp":mdp,"prefixe":prefixe,"pseudo":pseudo,"email":email})
+    envoyer_cli({"action":"inscrire","nom":nom,"mdp":mdp,"prefixe":prefixe})
     rep=attendre()
     if rep and rep.get("ok"):
-        numero=rep["numero"];pays=rep.get("pays","");pseudo_ok=rep.get("pseudo","")
+        numero=rep["numero"];pays=rep.get("pays","")
         print(f"""
 {V}{B}╔══════════════════════════════════════════╗
 ║   ✅  Compte cree avec succes!           ║
 ╠══════════════════════════════════════════╣
 ║   👤  {nom:<36}║
-║   @   {pseudo_ok:<36}║
 ║   📱  {numero:<36}║
 ║   🌍  {pays:<36}║
 ╚══════════════════════════════════════════╝{Z}
-{J}⚠️  Note bien ton numero et ton pseudo - ce sont tes identifiants!{Z}
+{J}⚠️  Note bien ton numero - c'est ton identifiant!{Z}
 """)
     else: erreur(rep.get("msg","Erreur") if rep else "Pas de reponse.")
     entree()
@@ -245,13 +240,6 @@ def connecter_par_numero():
     titre("📱 CONNEXION PAR NUMERO")
     numero=input("Ton numero: ").strip();mdp=input("Mot de passe: ").strip()
     envoyer_cli({"action":"connecter_numero","numero":numero,"mdp":mdp});rep=attendre()
-    if rep and rep.get("ok"): _finaliser_connexion(rep);return
-    erreur(rep.get("msg","Erreur") if rep else "Pas de reponse.");entree()
-
-def connecter_par_email():
-    titre("📧 CONNEXION PAR EMAIL")
-    email=input("Ton email: ").strip();mdp=input("Mot de passe: ").strip()
-    envoyer_cli({"action":"connecter_email","email":email,"mdp":mdp});rep=attendre()
     if rep and rep.get("ok"): _finaliser_connexion(rep);return
     erreur(rep.get("msg","Erreur") if rep else "Pas de reponse.");entree()
 
@@ -291,23 +279,16 @@ def menu_messages():
         choix=input(f"{J}Choix: {Z}").strip().lower()
         if choix=="r": break
         elif choix=="n":
-            nd=input("Numero ou @pseudo du destinataire: ").strip()
+            nd=input("Numero du destinataire: ").strip()
             if nd: _ouvrir_chat(nd)
         elif choix.isdigit():
             idx=int(choix)-1
             if 0<=idx<len(convs): _ouvrir_chat(convs[idx]["numero"])
 
 def _ouvrir_chat(nd):
-    if nd.startswith("@"):
-        envoyer_cli({"action":"chercher","pseudo":nd[1:]});rep=attendre()
-        if not rep or not rep.get("ok"): erreur(rep.get("msg","Introuvable.") if rep else "?");entree();return
-        nd=rep["user"]["numero"]  # on bascule sur le vrai numero pour tout le reste
-        u=rep["user"]
-    else:
-        envoyer_cli({"action":"chercher","numero":nd});rep=attendre()
-        if not rep or not rep.get("ok"): erreur(rep.get("msg","Introuvable.") if rep else "?");entree();return
-        u=rep["user"]
-    st=STATUTS_ICONS.get(u.get("statut","disponible"),"")
+    envoyer_cli({"action":"chercher","numero":nd});rep=attendre()
+    if not rep or not rep.get("ok"): erreur(rep.get("msg","Introuvable.") if rep else "?");entree();return
+    u=rep["user"];st=STATUTS_ICONS.get(u.get("statut","disponible"),"")
     chiffrer_msgs=False;cle_chat=None
     if input(f"\n{J}Activer chiffrement? (o/n): {Z}").strip().lower()=="o":
         phrase=input(f"{J}Phrase secrete partagee avec {u['nom']} (a se transmettre hors TermChat): {Z}").strip()
@@ -399,12 +380,9 @@ def _ouvrir_chat(nd):
 
 def envoyer_fichier_menu():
     titre("📎 ENVOYER UN FICHIER")
-    nd=input("Numero ou @pseudo du destinataire: ").strip()
-    if nd.startswith("@"): envoyer_cli({"action":"chercher","pseudo":nd[1:]})
-    else: envoyer_cli({"action":"chercher","numero":nd})
-    rep=attendre()
+    nd=input("Numero du destinataire: ").strip()
+    envoyer_cli({"action":"chercher","numero":nd});rep=attendre()
     if not rep or not rep.get("ok"): erreur("Introuvable.");entree();return
-    nd=rep["user"]["numero"]  # on bascule sur le vrai numero pour l'envoi
     chemin=input("Chemin du fichier: ").strip();_envoyer_fichier(nd,chemin);entree()
 
 def _envoyer_fichier(nd,chemin):
@@ -702,7 +680,6 @@ def main():
                 if choix=="1": inscrire()
                 elif choix=="2": connecter()
                 elif choix=="3": connecter_par_numero()
-                elif choix=="4": connecter_par_email()
                 elif choix=="q": quitter()
             else:
                 choix=menu_principal()
