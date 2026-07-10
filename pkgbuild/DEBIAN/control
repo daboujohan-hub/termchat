@@ -1,0 +1,9 @@
+Package: termchat
+Version: 6.0-1
+Architecture: all
+Maintainer: Aboudev Labs <daboujohan-hub@github.com>
+Depends: python, python-cryptography
+Section: net
+Priority: optional
+Description: TermChat v6.0 - Messagerie terminal chiffree
+ Client de messagerie en ligne de commande pour developpeurs.
