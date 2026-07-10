@@ -1,24 +1,72 @@
 # 💬 TermChat v6.0
-**Messagerie Mondiale pour Developpeurs** — by Aboudev Labs 🇨🇮
+**Messagerie terminal chiffrée pour développeurs** — by Aboudev Labs 🇨🇮
 
-## Nouveautés v6.0
+📖 **Nouveau sur TermChat ?** Lis le [Guide d'utilisation complet](GUIDE_UTILISATEUR.md)
+pour tout comprendre : installation, création de compte, chiffrement, menu.
+
+---
+
+## 📝 Mot du développeur
+
+TermChat est un projet solo, développé et maintenu entièrement depuis
+Termux sur Android par Aboudev Labs, Côte d'Ivoire 🇨🇮. C'est un
+laboratoire d'apprentissage autant qu'une vraie messagerie : chaque
+mise à jour vise à rapprocher le projet des standards de sécurité d'une
+vraie application de messagerie, tout en gardant l'esprit terminal qui
+fait son originalité.
+
+Le projet évolue par itérations rapides — si tu trouves un bug ou une
+faille, ouvre une issue sur GitHub, ou contribue directement (voir plus
+bas).
+
+---
+
+## 🆕 Journal des mises à jour
+
+### v6.0 (actuelle)
+- 🔐 Mots de passe chiffrés avec **bcrypt** (migration automatique des anciens comptes)
+- 🔐 Chiffrement des messages **Fernet/AES** avec phrase secrète partagée (remplace l'ancien XOR)
+- 🔐 **TLS** sur la connexion (certificat auto-signé, avec repli en clair si indisponible)
+- 🛡️ Protection **anti-bruteforce** (5 tentatives max, blocage 5 min) sur login/PIN/admin
+- 🏷️ **Pseudo unique** (@handle) pour retrouver facilement un contact
+- 📧 **Connexion par email** en plus du nom et du numéro
+- 📎 Correction : les fichiers et messages vocaux apparaissent maintenant bien dans l'historique
+- 🔍 Suppression de la recherche libre d'utilisateurs (protection de la vie privée) — remplacée par une recherche stricte par numéro ou pseudo exact
+- ⚙️ Serveur rendu plus robuste (le handshake TLS ne bloque plus les autres connexions)
+
+### Versions antérieures
 - Base de données Firebase Firestore (données permanentes)
-- Pas de système de paiement — accès libre
+- Accès libre, sans système de paiement
 - Interface messages avec liste des conversations
-- 5 pays : CI, SN, GN, BF, GH
+- 5 pays disponibles : CI, SN, GN, BF, GH
 
-## Installation
+---
+
+## 📲 Installation
+
 ```bash
 curl -s https://raw.githubusercontent.com/daboujohan-hub/termchat/main/install.sh | bash
+termchat
 ```
 
-## Variable d'environnement Railway
-Ajouter sur Railway : FIREBASE_CREDS = (contenu du fichier JSON Firebase)
+Détails complets, création de compte et utilisation : voir le
+[Guide d'utilisation](GUIDE_UTILISATEUR.md).
+
+## ⚙️ Variable d'environnement Railway (pour héberger ton propre serveur)
+
+| Variable | Description |
+|---|---|
+| `FIREBASE_CREDS` | Contenu JSON complet des identifiants Firebase |
+| `ADMIN_CODE` | Code d'accès admin (sinon valeur par défaut peu sûre) |
+| `PORT` | Port d'écoute (fourni automatiquement par Railway) |
+
+---
 
 ## 🤝 Contribuer
 
-TermChat est un projet open source et toute contribution est la bienvenue !
-Pas besoin d'expérience énorme — c'est un bon projet pour apprendre Node.js, Firebase et les outils CLI.
+TermChat est un projet open source et toute contribution est la
+bienvenue ! Pas besoin d'expérience énorme — c'est un bon projet pour
+apprendre Python, Firebase, la cryptographie appliquée et les outils CLI.
 
 **Comment contribuer :**
 1. Fork le repo
@@ -26,30 +74,38 @@ Pas besoin d'expérience énorme — c'est un bon projet pour apprendre Node.js,
 3. Fais tes modifications
 4. Ouvre une Pull Request en expliquant ce que tu as changé
 
-Tous les contributeurs seront mentionnés ci-dessous 👇
-
 ### Contributeurs
 - [Diomandé Abou Johan (Aboudev)](https://github.com/daboujohan-hub) — créateur du projet
 
 ---
 
+---
+
+## 💌 Donner ton avis / signaler un problème
+
+Deux façons de faire remonter une remarque, un bug ou une idée :
+
+1. **Depuis l'app directement** : menu principal → `f — Feedback au développeur`.
+   Ton message est transmis en direct, sans avoir besoin de GitHub.
+2. **Via GitHub Issues** : https://github.com/daboujohan-hub/termchat/issues/new
+   — utile si tu veux suivre l'avancement de ta demande publiquement.
+
+---
+
 ## 🐛 Tâches ouvertes (Good First Issues)
 
-Voici des tâches concrètes si tu veux contribuer :
+1. **Diagnostiquer l'échec systématique du handshake TLS** sur le proxy
+   Railway (le repli en clair fonctionne, mais le TLS échoue toujours —
+   piste à creuser côté configuration proxy).
+2. **Ajouter la possibilité de modifier l'email** depuis "Mon profil"
+   pour les comptes existants (actuellement modifiable seulement à
+   l'inscription).
+3. **Tests automatisés** pour les actions serveur principales
+   (inscription, connexion, envoi de message).
+4. **Documentation des actions du protocole** (`inscrire`, `connecter`,
+   `message`, etc.) dans un fichier `PROTOCOL.md`.
+5. **Support d'un 6ème pays** avec son indicatif et sa validation.
 
-1. **Gestion des erreurs réseau dans `install.sh`**
-   Le script d'installation doit afficher un message clair si la connexion échoue ou si `curl` n'est pas installé, au lieu de planter silencieusement.
-
-2. **Validation des numéros TC-XXXXXXXXX**
-   Ajouter une vérification côté serveur pour s'assurer que le format du numéro virtuel est correct avant de créer une conversation.
-
-3. **Tests automatisés basiques**
-   Écrire quelques tests simples (avec Jest ou Node `assert`) pour vérifier que l'API répond correctement aux routes principales.
-
-4. **Documentation des routes API**
-   Lister et décrire les endpoints existants (ex: `/messages`, `/register`) dans un fichier `API.md`.
-
-5. **Support d'un 6ème pays**
-   Ajouter un pays supplémentaire à la liste actuelle (CI, SN, GN, BF, GH) avec son indicatif et sa validation.
-
-Si une de ces tâches t'intéresse, ouvre une issue GitHub en précisant laquelle tu prends, pour éviter que deux personnes travaillent dessus en même temps.
+Si une tâche t'intéresse, ouvre une issue GitHub en précisant laquelle
+tu prends, pour éviter que deux personnes travaillent dessus en même
+temps.
