@@ -24,6 +24,8 @@ except ImportError:
 # ══════════════════════════════════════════════════════════
 PORT       = int(os.environ.get("PORT", 9999))
 ADMIN_CODE = os.environ.get("ADMIN_CODE", "aboudev2025")
+RE_PSEUDO  = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{2,19}$")
+RE_EMAIL   = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 FIREBASE_CREDS = os.environ.get("FIREBASE_CREDS", "")  # JSON string
 CERT_DIR   = os.path.join(os.path.expanduser("~"), ".termchat_tls")
 CERT_FILE  = os.path.join(CERT_DIR, "cert.pem")
@@ -390,7 +392,8 @@ def _connecter_user(conn, user, uid):
         "couleur": user.get("couleur","cyan"),
         "statut": user.get("statut","disponible"),
         "est_admin": est_admin, "non_lus": non_lus,
-        "a_pin": bool(user.get("pin"))
+        "a_pin": bool(user.get("pin")),
+        "pseudo": user.get("pseudo","")
     })
     notifier_statut(num_co, True)
     return num_co, est_admin
@@ -430,9 +433,6 @@ def gerer_client(conn, addr):
                     couleur = p.get("couleur","cyan")
                     pseudo  = p.get("pseudo","").strip().lstrip("@")
                     email   = p.get("email","").strip()
-
-                    RE_PSEUDO = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{2,19}$")
-                    RE_EMAIL  = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
                     if not nom or len(nom)<2 or len(nom)>20:
                         envoyer_srv(conn, {"ok":False,"msg":"Nom: 2 a 20 caracteres."})
@@ -517,6 +517,24 @@ def gerer_client(conn, addr):
                         if not user.get("mdp","").startswith(("$2b$","$2a$")):
                             fs_update_user(uid, {"mdp": hacher(mdp)})  # remigration bcrypt au vol
                         num_co, est_admin = _connecter_user(conn, user, uid)
+
+                # ─── DEFINIR PSEUDO (migration anciens comptes) ──
+                elif act == "definir_pseudo":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        pseudo = p.get("pseudo","").strip().lstrip("@")
+                        if not RE_PSEUDO.match(pseudo):
+                            envoyer_srv(conn, {"ok":False,"msg":"Pseudo invalide: 3-20 caracteres, doit commencer par une lettre, lettres/chiffres/underscore uniquement."})
+                        elif fs_get_user_by_pseudo(pseudo)[1] is not None:
+                            envoyer_srv(conn, {"ok":False,"msg":f"Le pseudo @{pseudo} est deja pris."})
+                        else:
+                            uid, _ = fs_get_user_by_numero(num_co)
+                            if uid:
+                                fs_update_user(uid, {"pseudo": pseudo, "pseudo_lower": pseudo.lower()})
+                                envoyer_srv(conn, {"ok":True,"pseudo":pseudo,"msg":f"Pseudo @{pseudo} enregistre!"})
+                            else:
+                                envoyer_srv(conn, {"ok":False,"msg":"Compte introuvable."})
 
                 # ─── DÉCONNEXION ──────────────────────────
                 elif act == "deconnecter":

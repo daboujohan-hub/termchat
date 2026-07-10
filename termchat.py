@@ -17,7 +17,7 @@ os.makedirs(DOWNLOADS,exist_ok=True)
 
 PAYS={"1":("🇨🇮 Cote d'Ivoire","+225"),"2":("🇸🇳 Senegal","+221"),"3":("🇬🇳 Guinee","+224"),"4":("🇧🇫 Burkina Faso","+226"),"5":("🇬🇭 Ghana","+233")}
 
-session={"connecte":False,"nom":None,"numero":None,"pays":None,"bio":"","couleur":"cyan","statut":"disponible","est_admin":False,"non_lus":0,"a_pin":False}
+session={"connecte":False,"nom":None,"numero":None,"pays":None,"bio":"","couleur":"cyan","statut":"disponible","est_admin":False,"non_lus":0,"a_pin":False,"pseudo":""}
 sock_cli=None;en_cours=True;reponses=[];rep_lock=threading.Lock()
 phrases_secretes={}  # numero_contact -> phrase secrete (en memoire seulement, jamais envoyee au serveur)
 
@@ -259,7 +259,7 @@ def _finaliser_connexion(rep):
     session.update({"connecte":True,"nom":rep["nom"],"numero":rep["numero"],
         "pays":rep.get("pays",""),"bio":rep.get("bio",""),"couleur":rep.get("couleur","cyan"),
         "statut":rep.get("statut","disponible"),"est_admin":rep.get("est_admin",False),
-        "non_lus":rep.get("non_lus",0),"a_pin":rep.get("a_pin",False)})
+        "non_lus":rep.get("non_lus",0),"a_pin":rep.get("a_pin",False),"pseudo":rep.get("pseudo","")})
     if session["a_pin"]:
         tentatives=0
         while tentatives<3:
@@ -268,6 +268,19 @@ def _finaliser_connexion(rep):
             if rep_pin and rep_pin.get("ok"): break
             erreur("PIN incorrect.");tentatives+=1
         else: erreur("Trop de tentatives."); session["connecte"]=False;return
+    if not session["pseudo"]:
+        print(f"\n{J}⚠️  Ton compte n'a pas encore de pseudo (@handle).{Z}")
+        print(f"{J}   C'est desormais requis pour que les autres puissent te trouver facilement.{Z}")
+        while True:
+            pseudo=input(f"\n{J}Choisis ton pseudo @ (3-20 car., lettre puis lettres/chiffres/_): {Z}").strip().lstrip("@")
+            if not pseudo:
+                info("Tu pourras le definir plus tard depuis 'Mon profil'.");break
+            envoyer_cli({"action":"definir_pseudo","pseudo":pseudo});rep_p=attendre()
+            if rep_p and rep_p.get("ok"):
+                session["pseudo"]=rep_p.get("pseudo",pseudo)
+                succes(rep_p.get("msg","Pseudo enregistre!"));break
+            else:
+                erreur(rep_p.get("msg","Erreur") if rep_p else "Pas de reponse.")
     nl=session["non_lus"]
     print(f"\n{V}{B}✅ Bienvenue {rep['nom']}!{Z}")
     if nl>0: print(f"{J}📬 {nl} message(s) non lu(s)!{Z}")
@@ -513,10 +526,18 @@ def voir_en_ligne():
 def mon_profil():
     titre("👤 MON PROFIL");st=STATUTS_ICONS.get(session.get("statut","disponible"),"")
     print(f"  👤  Nom:    {B}{session.get('nom','')}{Z}")
+    pseudo_aff = f"@{session['pseudo']}" if session.get("pseudo") else f"{J}(non defini){Z}"
+    print(f"  🏷️   Pseudo: {pseudo_aff}")
     print(f"  📱  N°:     {session.get('numero','')} {V}✓{Z}")
     print(f"  🌍  Pays:   {G}{session.get('pays','—')}{Z}")
     print(f"  📝  Bio:    {G}{session.get('bio','—')}{Z}")
     print(f"  😊  Statut: {st}\n")
+    if not session.get("pseudo"):
+        if input("Definir ton pseudo maintenant? (o/n): ").strip().lower()=="o":
+            pseudo=input("Pseudo @ (3-20 car., lettre puis lettres/chiffres/_): ").strip().lstrip("@")
+            envoyer_cli({"action":"definir_pseudo","pseudo":pseudo});rep=attendre()
+            if rep and rep.get("ok"): session["pseudo"]=rep.get("pseudo",pseudo);succes(rep["msg"])
+            else: erreur(rep.get("msg","?") if rep else "?")
     if input("Modifier ta bio? (o/n): ").strip().lower()=="o":
         bio=input("Nouvelle bio (max 150): ").strip()[:150]
         envoyer_cli({"action":"modifier_bio","bio":bio});rep=attendre()
