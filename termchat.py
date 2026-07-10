@@ -194,6 +194,7 @@ def menu_principal():
     print(f"  {C2}7{Z} — 👤  Mon profil")
     print(f"  {C2}8{Z} — 😊  Statut")
     print(f"  {C2}9{Z} — 🎨  Couleur")
+    print(f"  {C2}f{Z} — 💌  Feedback au developpeur")
     print(f"  {C2}s{Z} — 🛡️   Securite")
     if session.get("est_admin"): print(f"  {C2}0{Z} — ⚙️   Panel Admin")
     print(f"  {C2}q{Z} — 🚪  Deconnecter\n")
@@ -570,6 +571,18 @@ def personnalisation():
     except: erreur("Choix invalide.")
     entree()
 
+def envoyer_feedback():
+    titre("💌 FEEDBACK AU DEVELOPPEUR")
+    print(f"{G}Un bug, une idee, une remarque ? Ecris-la ici, elle sera{Z}")
+    print(f"{G}transmise directement au developpeur de TermChat.{Z}\n")
+    texte=input("Ton message (max 500 car.): ").strip()
+    if not texte:
+        info("Message vide, annule.");entree();return
+    envoyer_cli({"action":"envoyer_feedback","texte":texte});rep=attendre()
+    if rep and rep.get("ok"): succes(rep.get("msg","Envoye!"))
+    else: erreur(rep.get("msg","Erreur") if rep else "Pas de reponse.")
+    entree()
+
 def menu_securite():
     while True:
         titre("🛡️  SECURITE");C2=get_C()
@@ -636,6 +649,7 @@ def panel_admin():
         print(f"  {C2}2{Z} — 👥  Tous les utilisateurs")
         print(f"  {C2}3{Z} — 📢  Broadcast")
         print(f"  {C2}4{Z} — ⛔  Kick utilisateur")
+        print(f"  {C2}5{Z} — 💌  Feedback recus")
         print(f"  {C2}r{Z} — 🔙  Retour\n")
         choix=input(f"{J}Choix: {Z}").strip().lower()
         if choix=="1":
@@ -669,6 +683,18 @@ def panel_admin():
             envoyer_cli({"action":"admin_kick","numero":numero});rep=attendre()
             if rep and rep.get("ok"): succes(rep.get("msg",""))
             else: erreur(rep.get("msg","?") if rep else "?")
+            entree()
+        elif choix=="5":
+            envoyer_cli({"action":"admin_feedback"});rep=attendre(10)
+            if rep and rep.get("ok"):
+                fb=rep.get("feedback",[])
+                titre(f"💌 FEEDBACK RECUS ({len(fb)})")
+                if not fb: print(f"  {G}Aucun feedback pour le moment.{Z}")
+                for f in fb:
+                    dt=f.get("heure","")[:16].replace("T"," ")
+                    print(f"\n  {G}{dt}{Z} — {B}{f.get('nom','?')}{Z} ({f.get('numero','?')})")
+                    print(f"  {f.get('texte','')}")
+            else: erreur("Erreur.")
             entree()
         elif choix=="r": break
 
@@ -735,6 +761,7 @@ def main():
                 elif choix=="7": mon_profil()
                 elif choix=="8": changer_statut()
                 elif choix=="9": personnalisation()
+                elif choix=="f": envoyer_feedback()
                 elif choix=="s": menu_securite()
                 elif choix=="0": panel_admin()
                 elif choix=="q": quitter()

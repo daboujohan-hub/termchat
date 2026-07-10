@@ -182,6 +182,26 @@ def fs_delete_user(uid):
     try: db.collection("users").document(uid).delete()
     except Exception as e: print(f"Firestore erreur: {e}")
 
+def fs_save_feedback(numero, nom, texte):
+    if not db: return
+    try:
+        fid = f"fb_{int(time.time())}_{random.randint(1000,9999)}"
+        db.collection("feedback").document(fid).set({
+            "numero": numero, "nom": nom, "texte": texte,
+            "heure": horodatage(), "lu": False
+        })
+    except Exception as e: print(f"Firestore erreur: {e}")
+
+def fs_get_feedback(limite=30):
+    if not db: return []
+    try:
+        docs = db.collection("feedback")\
+                 .order_by("heure", direction=firestore.Query.DESCENDING)\
+                 .limit(limite).stream()
+        return [doc.to_dict() for doc in docs]
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return []
+
 def fs_save_message(cle_conv, msg):
     if not db: return
     try:
@@ -355,6 +375,10 @@ def temps_restant(cle):
     with lock:
         nb, t = tentatives_echec.get(cle, [0, 0])
         return max(0, int(BLOCAGE_SECONDES - (time.time() - t)))
+
+# ── Cooldown feedback (anti-spam simple, independant de l'anti-bruteforce) ──
+dernier_feedback = {}   # numero -> timestamp du dernier envoi
+FEEDBACK_COOLDOWN = 60  # secondes entre deux feedbacks du meme compte
 
 def envoyer_srv(sock, paquet):
     try: sock.sendall((json.dumps(paquet, ensure_ascii=False) + "\n").encode())
@@ -732,6 +756,26 @@ def gerer_client(conn, addr):
                         uid, _ = fs_get_user_by_numero(num_co)
                         if uid: fs_update_user(uid, {"bio":bio}); envoyer_srv(conn, {"ok":True,"msg":"Bio mise a jour!"})
 
+                # ─── FEEDBACK (message au developpeur) ────
+                elif act == "envoyer_feedback":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        with lock:
+                            dernier = dernier_feedback.get(num_co, 0)
+                            attente = FEEDBACK_COOLDOWN - (time.time() - dernier)
+                        if attente > 0:
+                            envoyer_srv(conn, {"ok":False,"msg":f"Merci d'attendre {int(attente)}s avant un nouveau feedback."})
+                        else:
+                            texte = p.get("texte","").strip()[:500]
+                            if len(texte) < 3:
+                                envoyer_srv(conn, {"ok":False,"msg":"Message trop court."})
+                            else:
+                                _, user = fs_get_user_by_numero(num_co)
+                                fs_save_feedback(num_co, user["nom"] if user else "?", texte)
+                                with lock: dernier_feedback[num_co] = time.time()
+                                envoyer_srv(conn, {"ok":True,"msg":"Merci! Ton message a bien ete transmis au developpeur."})
+
                 elif act == "changer_mdp":
                     if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
                     else:
@@ -924,6 +968,11 @@ def gerer_client(conn, addr):
                         stats = fs_get_stats()
                         with lock: stats["en_ligne"] = len(clients)
                         envoyer_srv(conn, {"ok":True,"stats":stats})
+
+                elif act == "admin_feedback":
+                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else:
+                        envoyer_srv(conn, {"ok":True,"feedback":fs_get_feedback()})
 
                 elif act == "admin_users":
                     if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
