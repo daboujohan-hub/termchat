@@ -23,7 +23,12 @@ except ImportError:
 #  CONFIG
 # ══════════════════════════════════════════════════════════
 PORT       = int(os.environ.get("PORT", 9999))
-ADMIN_CODE = os.environ.get("ADMIN_CODE", "aboudev2025")
+ADMIN_CODE = os.environ.get("ADMIN_CODE", "")
+if not ADMIN_CODE or len(ADMIN_CODE) < 12:
+    print("❌ ERREUR : la variable d'environnement ADMIN_CODE doit être définie "
+          "(minimum 12 caractères, aléatoire). Aucune valeur par défaut n'est autorisée.")
+    print("   Exemple : export ADMIN_CODE=$(python3 -c \"import secrets;print(secrets.token_urlsafe(24))\")")
+    sys.exit(1)
 RE_PSEUDO  = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{2,19}$")
 RE_EMAIL   = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 FIREBASE_CREDS = os.environ.get("FIREBASE_CREDS", "")  # JSON string
@@ -481,7 +486,8 @@ def gerer_client(conn, addr):
                             "mdp": hacher(mdp), "pays": pays, "prefixe": prefixe,
                             "bio": "", "couleur": couleur, "statut": "disponible",
                             "inscription": horodatage(), "derniere_connexion": None,
-                            "favoris": [], "bloque": [], "est_admin": False, "pin": None
+                            "favoris": [], "bloque": [], "est_admin": False, "pin": None,
+                            "cle_publique": p.get("cle_publique") or None
                         }
                         fs_save_user(uid, user_data)
                         envoyer_srv(conn, {"ok":True,"numero":numero,"nom":nom,"pays":pays,"pseudo":pseudo})
@@ -594,7 +600,23 @@ def gerer_client(conn, addr):
                                 "nom":trouve["nom"],"numero":trouve["numero"],
                                 "pseudo":trouve.get("pseudo",""),
                                 "statut":trouve.get("statut","disponible"),
+                                "cle_publique":trouve.get("cle_publique"),
                                 "en_ligne":en_ligne}})
+
+                # ─── PUBLIER CLE PUBLIQUE (chiffrement E2E automatique) ──
+                # Le serveur ne stocke QUE la cle publique (X25519). La cle
+                # privee reste en local chez le client, jamais transmise.
+                # Sert a etablir un secret partage (ECDH) entre deux clients
+                # sans qu'un mot de passe ait besoin d'etre echange a la main.
+                elif act == "publier_cle_publique":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        cle_pub = p.get("cle_publique","").strip()
+                        uid, _ = fs_get_user_by_numero(num_co)
+                        if uid and cle_pub:
+                            fs_update_user(uid, {"cle_publique": cle_pub})
+                        envoyer_srv(conn, {"ok":True})
 
                 # ─── CONVERSATIONS ─────────────────────────
                 elif act == "mes_conversations":

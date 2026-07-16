@@ -7,3 +7,5 @@ services:
     envVars:
       - key: PORT
         value: 9999
+      - key: ADMIN_CODE
+        sync: false  # A definir manuellement dans le dashboard Render (min. 12 caracteres aleatoires, jamais dans le code/le repo)

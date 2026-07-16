@@ -6,7 +6,9 @@ import socket, threading, json, os, base64, ssl
 import datetime, time, sys, signal, hashlib
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
 
 R="\033[91m";B="\033[1m";Z="\033[0m";G="\033[90m";V="\033[92m";J="\033[93m";M="\033[95m"
 COULEURS={"cyan":"\033[96m","vert":"\033[92m","jaune":"\033[93m","magenta":"\033[95m","bleu":"\033[94m","rouge":"\033[91m","blanc":"\033[97m"}
@@ -15,11 +17,55 @@ STATUTS_ICONS={"disponible":f"{V}🟢 Disponible{Z}","occupe":f"{J}🟡 Occupe{Z
 DOWNLOADS=os.path.join(os.path.expanduser("~"),"termchat_downloads")
 os.makedirs(DOWNLOADS,exist_ok=True)
 
+TRUST_DIR=os.path.join(os.path.expanduser("~"),".termchat_tls")
+KNOWN_HOSTS=os.path.join(TRUST_DIR,"known_hosts.json")
+os.makedirs(TRUST_DIR,exist_ok=True)
+
+def empreinte_certificat(sock_tls):
+    """Calcule l'empreinte SHA-256 du certificat presente par le serveur."""
+    der=sock_tls.getpeercert(binary_form=True)
+    return hashlib.sha256(der).hexdigest()
+
+def verifier_confiance_tls(host, port, empreinte):
+    """Pinning TOFU (Trust On First Use), a la maniere du known_hosts SSH.
+    Premiere connexion a un hote: on enregistre son empreinte.
+    Connexions suivantes: on refuse si l'empreinte a change (signe possible
+    d'une attaque MITM ou d'un serveur usurpe), sauf validation explicite."""
+    cle=f"{host}:{port}"
+    connus={}
+    if os.path.exists(KNOWN_HOSTS):
+        try:
+            with open(KNOWN_HOSTS) as f: connus=json.load(f)
+        except Exception: connus={}
+    if cle not in connus:
+        print(f"{J}🔑 Nouveau serveur — empreinte du certificat :{Z}")
+        print(f"   {B}{empreinte}{Z}")
+        rep=input(f"{J}   Faire confiance a cette empreinte et l'enregistrer ? (o/n) : {Z}").strip().lower()
+        if rep!="o":
+            return False
+        connus[cle]=empreinte
+        with open(KNOWN_HOSTS,"w") as f: json.dump(connus,f,indent=2)
+        return True
+    if connus[cle]!=empreinte:
+        print(f"{R}⚠️  ALERTE SECURITE : l'empreinte du certificat de {cle} a CHANGE !{Z}")
+        print(f"{R}   Attendue : {connus[cle]}{Z}")
+        print(f"{R}   Recue    : {empreinte}{Z}")
+        print(f"{R}   Cela peut signifier une attaque (interception du trafic) ou un{Z}")
+        print(f"{R}   changement legitime de serveur (reinstallation, migration...).{Z}")
+        rep=input(f"{J}   Accepter quand meme la nouvelle empreinte ? (taper 'confirmer') : {Z}").strip().lower()
+        if rep!="confirmer":
+            return False
+        connus[cle]=empreinte
+        with open(KNOWN_HOSTS,"w") as f: json.dump(connus,f,indent=2)
+    return True
+
 PAYS={"1":("🇨🇮 Cote d'Ivoire","+225"),"2":("🇸🇳 Senegal","+221"),"3":("🇬🇳 Guinee","+224"),"4":("🇧🇫 Burkina Faso","+226"),"5":("🇬🇭 Ghana","+233")}
 
 session={"connecte":False,"nom":None,"numero":None,"pays":None,"bio":"","couleur":"cyan","statut":"disponible","est_admin":False,"non_lus":0,"a_pin":False,"pseudo":""}
 sock_cli=None;en_cours=True;reponses=[];rep_lock=threading.Lock()
 phrases_secretes={}  # numero_contact -> phrase secrete (en memoire seulement, jamais envoyee au serveur)
+ma_cle_privee=None  # cle privee X25519 locale (chargee a la connexion, jamais transmise)
+cles_partagees_cache={}  # numero_contact -> cle Fernet deja derivee via ECDH (evite de refaire l'echange)
 
 def generer_cle(n1, n2, phrase_secrete):
     """Derive une cle Fernet (AES) a partir d'une phrase secrete que SEULS
@@ -29,6 +75,41 @@ def generer_cle(n1, n2, phrase_secrete):
     sel = "".join(sorted([n1, n2])).encode()
     kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=sel, iterations=200_000)
     return base64.urlsafe_b64encode(kdf.derive(phrase_secrete.encode()))
+
+IDENTITY_FILE=os.path.join(TRUST_DIR,"identity_key")
+
+def charger_ou_creer_identite():
+    """Charge la cle privee X25519 locale, ou en cree une si absente.
+    La cle privee ne quitte JAMAIS cet appareil. Seule la cle publique
+    correspondante est envoyee au serveur (pour que les contacts puissent
+    etablir un secret partage via ECDH, sans mot de passe a echanger)."""
+    if os.path.exists(IDENTITY_FILE):
+        with open(IDENTITY_FILE,"rb") as f: data=f.read()
+        priv=X25519PrivateKey.from_private_bytes(data)
+    else:
+        priv=X25519PrivateKey.generate()
+        raw=priv.private_bytes(encoding=serialization.Encoding.Raw,
+                                format=serialization.PrivateFormat.Raw,
+                                encryption_algorithm=serialization.NoEncryption())
+        with open(IDENTITY_FILE,"wb") as f: f.write(raw)
+        try: os.chmod(IDENTITY_FILE,0o600)
+        except Exception: pass
+    return priv
+
+def cle_publique_b64(priv):
+    pub=priv.public_key().public_bytes(encoding=serialization.Encoding.Raw,
+                                        format=serialization.PublicFormat.Raw)
+    return base64.urlsafe_b64encode(pub).decode()
+
+def deriver_cle_partagee(ma_cle_privee, cle_publique_pair_b64, n1, n2):
+    """Etablit une cle symetrique unique par conversation via ECDH X25519 +
+    HKDF. Le secret n'est jamais transmis: chaque cote le recalcule
+    localement a partir de sa cle privee et de la cle publique de l'autre."""
+    pub_pair=X25519PublicKey.from_public_bytes(base64.urlsafe_b64decode(cle_publique_pair_b64))
+    secret=ma_cle_privee.exchange(pub_pair)
+    sel="".join(sorted([n1,n2])).encode()
+    hkdf=HKDF(algorithm=hashes.SHA256(),length=32,salt=sel,info=b"termchat-e2e")
+    return base64.urlsafe_b64encode(hkdf.derive(secret))
 
 def chiffrer(t, cle):
     try: return Fernet(cle).encrypt(t.encode()).decode()
@@ -101,8 +182,14 @@ def afficher_entrant(p):
     if t=="message":
         num_exp=p.get("numero","");texte=p.get("texte","")
         if p.get("chiffre") and session.get("numero"):
+            cle_auto=cles_partagees_cache.get(num_exp)
             phrase=phrases_secretes.get(num_exp)
-            texte=dechiffrer(texte,generer_cle(session["numero"],num_exp,phrase)) if phrase else "🔒 [Chiffre - phrase secrete non definie dans cette session]"
+            if cle_auto:
+                texte=dechiffrer(texte,cle_auto)
+            elif phrase:
+                texte=dechiffrer(texte,generer_cle(session["numero"],num_exp,phrase))
+            else:
+                texte="🔒 [Chiffre - ouvre la conversation pour etablir la cle]"
         beep();reply=p.get("reply_to")
         print(f"\n{V}{B}[{h}] 💬 {p.get('de','?')} ({num_exp}){Z}")
         if reply: print(f"{G}     ↩️  {reply[:40]}{Z}")
@@ -261,6 +348,10 @@ def _finaliser_connexion(rep):
         "pays":rep.get("pays",""),"bio":rep.get("bio",""),"couleur":rep.get("couleur","cyan"),
         "statut":rep.get("statut","disponible"),"est_admin":rep.get("est_admin",False),
         "non_lus":rep.get("non_lus",0),"a_pin":rep.get("a_pin",False),"pseudo":rep.get("pseudo","")})
+    global ma_cle_privee
+    ma_cle_privee=charger_ou_creer_identite()
+    envoyer_cli({"action":"publier_cle_publique","cle_publique":cle_publique_b64(ma_cle_privee)})
+    attendre(3)  # ne bloque pas la connexion si pas de reponse rapide
     if session["a_pin"]:
         tentatives=0
         while tentatives<3:
@@ -323,14 +414,25 @@ def _ouvrir_chat(nd):
         u=rep["user"]
     st=STATUTS_ICONS.get(u.get("statut","disponible"),"")
     chiffrer_msgs=False;cle_chat=None
-    if input(f"\n{J}Activer chiffrement? (o/n): {Z}").strip().lower()=="o":
-        phrase=input(f"{J}Phrase secrete partagee avec {u['nom']} (a se transmettre hors TermChat): {Z}").strip()
-        if phrase:
-            chiffrer_msgs=True;cle_chat=generer_cle(session["numero"],nd,phrase)
-            phrases_secretes[nd]=phrase
-            succes("Chiffrement active 🔐")
-        else:
-            info("Phrase vide, chiffrement desactive.")
+    cle_pub_pair=u.get("cle_publique")
+    if cle_pub_pair and ma_cle_privee:
+        try:
+            cle_chat=deriver_cle_partagee(ma_cle_privee,cle_pub_pair,session["numero"],nd)
+            cles_partagees_cache[nd]=cle_chat
+            chiffrer_msgs=True
+            succes("Chiffrement de bout en bout active automatiquement 🔐")
+        except Exception:
+            chiffrer_msgs=False
+    if not chiffrer_msgs:
+        info(f"{u['nom']} n'a pas encore de cle de chiffrement publiee (ancienne version de TermChat).")
+        if input(f"{J}Activer un chiffrement manuel de secours? (o/n): {Z}").strip().lower()=="o":
+            phrase=input(f"{J}Phrase secrete partagee avec {u['nom']} (a se transmettre hors TermChat): {Z}").strip()
+            if phrase:
+                chiffrer_msgs=True;cle_chat=generer_cle(session["numero"],nd,phrase)
+                phrases_secretes[nd]=phrase
+                succes("Chiffrement manuel active 🔐")
+            else:
+                info("Phrase vide, chiffrement desactive.")
     envoyer_cli({"action":"historique","avec":nd,"limite":20});rep_h=attendre(8)
     if rep_h and rep_h.get("ok"):
         hist=rep_h.get("historique",[])
@@ -716,24 +818,28 @@ def main():
     try:
         sock_cli=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
         sock_cli.settimeout(10);sock_cli.connect((host,port))
-        # TLS: le serveur utilise un certificat auto-signe (pas de CA reconnue),
-        # on chiffre donc le transport sans verifier la chaine de confiance.
-        # Ca protege contre l'ecoute passive sur le reseau, mais pas contre un
-        # attaquant actif capable d'usurper le serveur (pas de pinning ici).
+        # TLS avec pinning TOFU (Trust On First Use, comme known_hosts en SSH):
+        # le certificat auto-signe n'a pas de chaine de confiance verifiable par
+        # une CA, mais on verifie que son empreinte correspond a celle enregistree
+        # lors de la premiere connexion. Aucun repli en clair n'est autorise: si
+        # le TLS ou la verification echoue, la connexion est refusee.
         try:
             ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             ctx.check_hostname=False;ctx.verify_mode=ssl.CERT_NONE
             sock_tls=ctx.wrap_socket(sock_cli,server_hostname=host)
+            empreinte=empreinte_certificat(sock_tls)
+            if not verifier_confiance_tls(host,port,empreinte):
+                erreur("Connexion refusee : empreinte du certificat non validee.")
+                sock_tls.close();sys.exit(1)
             sock_cli=sock_tls
-            print(f"{G}🔐 Connexion chiffree (TLS){Z}")
+            print(f"{G}🔐 Connexion chiffree (TLS, certificat verifie){Z}")
+        except SystemExit:
+            raise
         except Exception as e:
-            # wrap_socket() ferme le socket sous-jacent en cas d'echec: on en
-            # recree un neuf pour le repli en clair, sinon la connexion plante.
-            print(f"{J}⚠️  TLS indisponible, connexion en clair ({e}){Z}")
+            erreur(f"Impossible d'etablir une connexion chiffree ({e}) — connexion abandonnee.")
             try: sock_cli.close()
             except Exception: pass
-            sock_cli=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-            sock_cli.settimeout(10);sock_cli.connect((host,port))
+            sys.exit(1)
         sock_cli.settimeout(None)
         succes("Connecte!");print(f"{G}   📥 Fichiers → ~/termchat_downloads/{Z}\n")
     except Exception as e: erreur(f"Impossible de se connecter: {e}");sys.exit(1)
