@@ -54,13 +54,16 @@ pseudo, c'est ce qui permet aux autres de te trouver.
 
 ## 🔑 3. Se connecter
 
-Trois façons de se connecter, au choix :
+Deux façons de se connecter, au choix :
 
-- **2 — Se connecter** : avec ton nom + mot de passe
-- **3 — Se connecter par numéro** : avec ton numéro + mot de passe
-  (utile si plusieurs comptes partagent le même nom)
-- **4 — Se connecter par email** : uniquement si tu as renseigné un
+- **2 — Se connecter (numéro + mot de passe)** : ta méthode principale,
+  avec le numéro unique attribué à la création du compte
+- **3 — Se connecter par email** : uniquement si tu as renseigné un
   email à l'inscription
+
+> La connexion par nom a été retirée : plusieurs personnes peuvent
+> avoir le même nom affiché, ce qui la rendait ambiguë et peu sûre.
+> Le numéro (ou l'email) reste toujours unique.
 
 **Astuce anciens comptes** : si tu t'es inscrit avant l'ajout du système
 de pseudo, TermChat te proposera automatiquement d'en choisir un à ta
@@ -127,7 +130,26 @@ Dans la conversation, commandes utiles :
 
 ---
 
-## 📂 7. Fichiers reçus
+## ⭐ 7. Abonnement Premium
+
+TermChat propose un compte **gratuit** et un compte **premium** :
+
+| | Gratuit | Premium |
+|---|---|---|
+| Messagerie, vocaux, fichiers | ✅ | ✅ |
+| Groupes | Limités à 5 membres | Illimités |
+| Prix | 0 FCFA | 500-1000 FCFA/mois ou 5000-8000 FCFA/an |
+
+**Comment devenir premium :**
+1. Envoie le paiement par Mobile Money au numéro du développeur
+2. Envoie la capture d'écran de la transaction par WhatsApp
+3. Ton compte est activé sous peu de temps (activation manuelle)
+
+**Vérifier ton statut :** menu **Sécurité → 6 — Mon abonnement**
+
+---
+
+## 📂 8. Fichiers reçus
 
 Tous les fichiers et messages vocaux que tu reçois sont automatiquement
 enregistrés sur ton téléphone dans :
@@ -137,7 +159,7 @@ enregistrés sur ton téléphone dans :
 
 ---
 
-## ❓ 8. Problèmes fréquents
+## ❓ 9. Problèmes fréquents
 
 **"TLS indisponible, connexion en clair"** → normal, pas une erreur.
 L'app continue de fonctionner ; c'est juste que le chiffrement du
@@ -162,3 +184,8 @@ TermChat est open source. Pour proposer une amélioration :
 4. Ouvre une Pull Request en expliquant ce que tu as changé
 
 **Créateur du projet** : [Diomandé Abou Johan (Aboudev)](https://github.com/daboujohan-hub) — Aboudev Labs, Côte d'Ivoire 🇨🇮
+
+**Transparence sur l'IA** : une partie du code de TermChat a été écrite
+avec l'aide de Claude, une intelligence artificielle d'Anthropic. La
+conception, les décisions de sécurité, et les tests restent de mon
+ressort — l'IA m'aide à écrire et sécuriser le code plus vite.

@@ -14,6 +14,7 @@ import bcrypt
 try:
     import firebase_admin
     from firebase_admin import credentials, firestore
+    from google.cloud.firestore_v1.base_query import FieldFilter
     FIREBASE_OK = True
 except ImportError:
     FIREBASE_OK = False
@@ -120,9 +121,17 @@ def verifier_mdp(mdp, hash_stocke):
 def horodatage(): return datetime.datetime.now().isoformat()
 def heure():      return datetime.datetime.now().strftime("%H:%M")
 
+def est_premium_actif(user):
+    """True si le compte a un premium actif et non expire."""
+    if not user or not user.get("premium"): return False
+    exp = user.get("premium_expire")
+    if not exp: return False
+    try: return datetime.datetime.fromisoformat(exp) > datetime.datetime.now()
+    except Exception: return False
+
 def gen_numero(prefixe):
     if db:
-        users = db.collection("users").where("prefixe", "==", prefixe).stream()
+        users = db.collection("users").where(filter=FieldFilter("prefixe", "==", prefixe)).stream()
         nums  = {u.to_dict().get("numero","") for u in users}
     else:
         nums = set()
@@ -137,7 +146,7 @@ def gen_numero(prefixe):
 def fs_get_user_by_numero(numero):
     if not db: return None, None
     try:
-        docs = db.collection("users").where("numero", "==", numero).limit(1).stream()
+        docs = db.collection("users").where(filter=FieldFilter("numero", "==", numero)).limit(1).stream()
         for doc in docs:
             return doc.id, doc.to_dict()
         return None, None
@@ -147,7 +156,7 @@ def fs_get_user_by_numero(numero):
 def fs_get_user_by_nom(nom):
     if not db: return []
     try:
-        docs = db.collection("users").where("nom_lower", "==", nom.lower()).stream()
+        docs = db.collection("users").where(filter=FieldFilter("nom_lower", "==", nom.lower())).stream()
         return [(doc.id, doc.to_dict()) for doc in docs]
     except Exception as e:
         print(f"Firestore erreur: {e}"); return []
@@ -155,7 +164,7 @@ def fs_get_user_by_nom(nom):
 def fs_get_user_by_pseudo(pseudo):
     if not db: return None, None
     try:
-        docs = db.collection("users").where("pseudo_lower", "==", pseudo.lower().lstrip("@")).limit(1).stream()
+        docs = db.collection("users").where(filter=FieldFilter("pseudo_lower", "==", pseudo.lower().lstrip("@"))).limit(1).stream()
         for doc in docs:
             return doc.id, doc.to_dict()
         return None, None
@@ -165,7 +174,7 @@ def fs_get_user_by_pseudo(pseudo):
 def fs_get_user_by_email(email):
     if not db: return None, None
     try:
-        docs = db.collection("users").where("email_lower", "==", email.lower()).limit(1).stream()
+        docs = db.collection("users").where(filter=FieldFilter("email_lower", "==", email.lower())).limit(1).stream()
         for doc in docs:
             return doc.id, doc.to_dict()
         return None, None
@@ -237,25 +246,40 @@ def fs_marquer_lus(dest, exp):
         cle  = "_".join(sorted([dest, exp]))
         docs = db.collection("historique").document(cle)\
                  .collection("messages")\
-                 .where("vers", "==", dest)\
-                 .where("lu", "==", False).stream()
+                 .where(filter=FieldFilter("vers", "==", dest))\
+                 .where(filter=FieldFilter("lu", "==", False)).stream()
         batch = db.batch()
         for doc in docs:
             batch.update(doc.reference, {"lu": True})
         batch.commit()
     except Exception as e: print(f"Firestore erreur: {e}")
 
+def fs_mes_contacts(numero):
+    """Retourne la liste des numeros avec qui l'utilisateur a deja une conversation."""
+    if not db: return []
+    try:
+        contacts = set()
+        convs = db.collection("historique")\
+                  .where(filter=FieldFilter("participants", "array_contains", numero)).stream()
+        for conv in convs:
+            data = conv.to_dict() or {}
+            for part in data.get("participants", []):
+                if part != numero: contacts.add(part)
+        return list(contacts)
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return []
+
 def fs_compter_non_lus(numero):
     if not db: return 0
     try:
         count = 0
         convs = db.collection("historique")\
-                  .where("participants", "array_contains", numero).stream()
+                  .where(filter=FieldFilter("participants", "array_contains", numero)).stream()
         for conv in convs:
             msgs = db.collection("historique").document(conv.id)\
                      .collection("messages")\
-                     .where("vers", "==", numero)\
-                     .where("lu", "==", False).stream()
+                     .where(filter=FieldFilter("vers", "==", numero))\
+                     .where(filter=FieldFilter("lu", "==", False)).stream()
             count += sum(1 for _ in msgs)
         return count
     except Exception as e:
@@ -265,7 +289,7 @@ def fs_get_conversations(numero):
     if not db: return []
     try:
         convs_ref = db.collection("historique")\
-                      .where("participants", "array_contains", numero)\
+                      .where(filter=FieldFilter("participants", "array_contains", numero))\
                       .order_by("derniere_activite", direction=firestore.Query.DESCENDING)\
                       .limit(20).stream()
         result = []
@@ -285,8 +309,8 @@ def fs_get_conversations(numero):
             non_lus = 0
             msgs_nl = db.collection("historique").document(cid)\
                         .collection("messages")\
-                        .where("vers","==",numero)\
-                        .where("lu","==",False).stream()
+                        .where(filter=FieldFilter("vers","==",numero))\
+                        .where(filter=FieldFilter("lu","==",False)).stream()
             for _ in msgs_nl: non_lus += 1
             result.append({
                 "numero": autre, "nom": autre_user.get("nom","?"),
@@ -298,12 +322,12 @@ def fs_get_conversations(numero):
         print(f"Firestore erreur: {e}"); return []
 
 def fs_save_groupe(gid, data):
-    if not db: return
+    if not db or not gid: return
     try: db.collection("groupes").document(gid).set(data, merge=True)
     except Exception as e: print(f"Firestore erreur: {e}")
 
 def fs_get_groupe(gid):
-    if not db: return None
+    if not db or not gid: return None
     try:
         doc = db.collection("groupes").document(gid).get()
         return doc.to_dict() if doc.exists else None
@@ -314,13 +338,13 @@ def fs_mes_groupes(numero):
     if not db: return []
     try:
         docs = db.collection("groupes")\
-                 .where("membres", "array_contains", numero).stream()
+                 .where(filter=FieldFilter("membres", "array_contains", numero)).stream()
         return [(doc.id, doc.to_dict()) for doc in docs]
     except Exception as e:
         print(f"Firestore erreur: {e}"); return []
 
 def fs_save_msg_groupe(gid, msg):
-    if not db: return
+    if not db or not gid: return
     try:
         db.collection("groupes").document(gid)\
           .collection("messages").add(msg)
@@ -385,8 +409,12 @@ def temps_restant(cle):
 dernier_feedback = {}   # numero -> timestamp du dernier envoi
 FEEDBACK_COOLDOWN = 60  # secondes entre deux feedbacks du meme compte
 
+envoi_lock = threading.Lock()
+
 def envoyer_srv(sock, paquet):
-    try: sock.sendall((json.dumps(paquet, ensure_ascii=False) + "\n").encode())
+    try:
+        data = (json.dumps(paquet, ensure_ascii=False) + "\n").encode()
+        with envoi_lock: sock.sendall(data)
     except Exception: pass
 
 def livrer(numero, paquet):
@@ -397,9 +425,11 @@ def livrer(numero, paquet):
 def notifier_statut(numero, en_ligne):
     uid, user = fs_get_user_by_numero(numero)
     if not user: return
+    contacts = set(fs_mes_contacts(numero))
+    if not contacts: return
     with lock: cibles = list(clients.items())
     for num, sock in cibles:
-        if num != numero:
+        if num != numero and num in contacts:
             envoyer_srv(sock, {"type": "statut", "numero": numero,
                                "nom": user.get("nom","?"), "en_ligne": en_ligne})
 
@@ -487,32 +517,12 @@ def gerer_client(conn, addr):
                             "bio": "", "couleur": couleur, "statut": "disponible",
                             "inscription": horodatage(), "derniere_connexion": None,
                             "favoris": [], "bloque": [], "est_admin": False, "pin": None,
-                            "cle_publique": p.get("cle_publique") or None
+                            "cle_publique": p.get("cle_publique") or None,
+                            "premium": False, "premium_expire": None,
+                            "premium_type": None, "active_par": None
                         }
                         fs_save_user(uid, user_data)
                         envoyer_srv(conn, {"ok":True,"numero":numero,"nom":nom,"pays":pays,"pseudo":pseudo})
-
-                # ─── CONNEXION (nom) ──────────────────────
-                elif act == "connecter":
-                    ip = addr[0]; cle_bf = f"login_{ip}"
-                    if bloque(cle_bf):
-                        envoyer_srv(conn, {"ok":False,"msg":f"Trop de tentatives. Reessaie dans {temps_restant(cle_bf)}s."})
-                        continue
-                    nom = p.get("nom","").strip(); mdp = p.get("mdp","").strip()
-                    candidats = fs_get_user_by_nom(nom)
-                    match = next(((k,u) for k,u in candidats if verifier_mdp(mdp, u.get("mdp"))), None)
-                    if not match:
-                        signaler_echec(cle_bf)
-                        if len(candidats)>1:
-                            envoyer_srv(conn, {"ok":False,"msg":"Plusieurs comptes avec ce nom. Connecte-toi avec ton numero.","utiliser_numero":True})
-                        else:
-                            envoyer_srv(conn, {"ok":False,"msg":"Nom ou mot de passe incorrect."})
-                    else:
-                        signaler_succes(cle_bf)
-                        uid, user = match
-                        if not user.get("mdp","").startswith(("$2b$","$2a$")):
-                            fs_update_user(uid, {"mdp": hacher(mdp)})  # remigration bcrypt au vol
-                        num_co, est_admin = _connecter_user(conn, user, uid)
 
                 # ─── CONNEXION (numéro) ───────────────────
                 elif act == "connecter_numero":
@@ -759,10 +769,10 @@ def gerer_client(conn, addr):
                         cible  = p.get("numero","").strip(); action = p.get("bloquer",True)
                         uid, user = fs_get_user_by_numero(num_co)
                         if uid:
-                            bloque = user.get("bloque",[])
-                            if action and cible not in bloque: bloque.append(cible)
-                            elif not action and cible in bloque: bloque.remove(cible)
-                            fs_update_user(uid, {"bloque": bloque})
+                            liste_bloques = user.get("bloque",[])
+                            if action and cible not in liste_bloques: liste_bloques.append(cible)
+                            elif not action and cible in liste_bloques: liste_bloques.remove(cible)
+                            fs_update_user(uid, {"bloque": liste_bloques})
                             envoyer_srv(conn, {"ok":True,"msg":"Bloque." if action else "Debloque."})
 
                 # ─── PROFIL ───────────────────────────────
@@ -931,7 +941,12 @@ def gerer_client(conn, addr):
                         elif not cible_user: envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
                         elif cible in groupe.get("membres",[]): envoyer_srv(conn, {"ok":False,"msg":"Deja membre."})
                         else:
-                            membres = groupe.get("membres",[])+[cible]
+                            _, createur_user = fs_get_user_by_numero(groupe["createur"])
+                            membres_actuels = groupe.get("membres",[])
+                            if not est_premium_actif(createur_user) and len(membres_actuels) >= 5:
+                                envoyer_srv(conn, {"ok":False,"msg":"Limite de 5 membres atteinte. Passe premium pour un groupe illimite."})
+                                continue
+                            membres = membres_actuels+[cible]
                             if db: db.collection("groupes").document(gid).update({"membres":membres})
                             livrer(cible, {"type":"invitation_groupe","groupe":groupe["nom"],"id_groupe":gid,"heure":heure()})
                             envoyer_srv(conn, {"ok":True,"msg":"Membre ajoute!"})
@@ -967,6 +982,41 @@ def gerer_client(conn, addr):
                             if db: db.collection("groupes").document(gid).update({"epingle":texte})
                             for m in groupe.get("membres",[]): livrer(m, {"type":"epingle","groupe":groupe["nom"],"texte":texte,"heure":heure()})
                             envoyer_srv(conn, {"ok":True,"msg":"Message epingle!"})
+
+                # ─── PREMIUM (abonnement) ──────────────────
+                elif act == "verifier_mon_abonnement":
+                    if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        _, user = fs_get_user_by_numero(num_co)
+                        actif = est_premium_actif(user)
+                        envoyer_srv(conn, {"ok":True,"premium":actif,
+                            "premium_expire":user.get("premium_expire") if user else None,
+                            "premium_type":user.get("premium_type") if user else None})
+
+                elif act == "admin_activer_premium":
+                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else:
+                        cible = p.get("numero","").strip()
+                        type_abo = p.get("type","mensuel")  # "mensuel" ou "annuel"
+                        jours = 365 if type_abo == "annuel" else 30
+                        uid, user = fs_get_user_by_numero(cible)
+                        if not uid: envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        else:
+                            expire = (datetime.datetime.now() + datetime.timedelta(days=jours)).isoformat()
+                            fs_update_user(uid, {"premium":True,"premium_expire":expire,
+                                "premium_type":type_abo,"active_par":num_co})
+                            livrer(cible, {"type":"premium_active","expire":expire,"msg":"Ton compte premium est actif!"})
+                            envoyer_srv(conn, {"ok":True,"msg":f"Premium ({type_abo}) active pour {cible} jusqu'au {expire[:10]}."})
+
+                elif act == "admin_desactiver_premium":
+                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else:
+                        cible = p.get("numero","").strip()
+                        uid, _ = fs_get_user_by_numero(cible)
+                        if not uid: envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        else:
+                            fs_update_user(uid, {"premium":False,"premium_expire":None,"premium_type":None})
+                            envoyer_srv(conn, {"ok":True,"msg":f"Premium desactive pour {cible}."})
 
                 # ─── ADMIN ────────────────────────────────
                 elif act == "admin_login":
@@ -1034,7 +1084,10 @@ def gerer_client(conn, addr):
 
                 else: envoyer_srv(conn, {"ok":False,"msg":f"Action inconnue: {act}"})
 
-    except Exception: pass
+    except Exception as e:
+        import traceback
+        print(f"⚠️  Erreur gerer_client: {e}")
+        traceback.print_exc()
     finally:
         if num_co:
             with lock: clients.pop(num_co,None); admins_connectes.discard(num_co)
