@@ -147,9 +147,7 @@ def banniere():
 """)
 
 def envoyer_cli(p):
-    try:
-        with rep_lock: reponses.clear()
-        sock_cli.sendall((json.dumps(p,ensure_ascii=False)+"\n").encode())
+    try: sock_cli.sendall((json.dumps(p,ensure_ascii=False)+"\n").encode())
     except Exception as e: erreur(f"Reseau: {e}")
 
 def attendre(timeout=6):
@@ -337,9 +335,6 @@ def connecter_par_email():
     erreur(rep.get("msg","Erreur") if rep else "Pas de reponse.");entree()
 
 def _finaliser_connexion(rep):
-    if "nom" not in rep or "numero" not in rep:
-        erreur("Reponse serveur incomplete. Reessaie de te connecter.")
-        return
     session.update({"connecte":True,"nom":rep["nom"],"numero":rep["numero"],
         "pays":rep.get("pays",""),"bio":rep.get("bio",""),"couleur":rep.get("couleur","cyan"),
         "statut":rep.get("statut","disponible"),"est_admin":rep.get("est_admin",False),
@@ -375,7 +370,7 @@ def _finaliser_connexion(rep):
     time.sleep(1)
 
 def menu_messages():
-    while en_cours and session.get("connecte"):
+    while True:
         titre("💬 MESSAGES"); C2=get_C()
         envoyer_cli({"action":"mes_conversations"});rep=attendre(8)
         convs=rep.get("conversations",[]) if rep and rep.get("ok") else []
@@ -448,7 +443,7 @@ def _ouvrir_chat(nd):
     print(f"\n{V}✅ {u['nom']} — {st}{Z}")
     dernier_msg_id=None;expire_prochain=None
     print(f"\n{G}exit | /fichier | /vocal | /auto N | /repondre | /reaction | /rechercher | /effacer | /favori{Z}\n")
-    while en_cours and session.get("connecte"):
+    while True:
         try: texte=input(f"{B}[→ {u['nom']}] > {Z}").strip()
         except: break
         if texte.lower()=="exit": break
@@ -559,7 +554,7 @@ def voir_favoris():
     entree()
 
 def menu_groupes():
-    while en_cours and session.get("connecte"):
+    while True:
         titre("👥 GROUPES");C2=get_C()
         print(f"  {C2}1{Z} — 📋  Mes groupes")
         print(f"  {C2}2{Z} — ➕  Creer un groupe")
@@ -682,7 +677,7 @@ def envoyer_feedback():
     entree()
 
 def menu_securite():
-    while en_cours and session.get("connecte"):
+    while True:
         titre("🛡️  SECURITE");C2=get_C()
         print(f"  {C2}1{Z} — 🔑  Changer mot de passe")
         print(f"  {C2}2{Z} — 🚫  Bloquer un utilisateur")
@@ -756,7 +751,7 @@ def panel_admin():
         envoyer_cli({"action":"admin_login","code":code});rep=attendre()
         if not rep or not rep.get("ok"): erreur(rep.get("msg","Code incorrect.") if rep else "?");entree();return
         session["est_admin"]=True;succes("Acces accorde!")
-    while en_cours and session.get("connecte"):
+    while True:
         titre("⚙️  PANEL ADMIN");C2=get_C()
         print(f"  {C2}1{Z} — 📊  Statistiques")
         print(f"  {C2}2{Z} — 👥  Tous les utilisateurs")
@@ -768,13 +763,13 @@ def panel_admin():
         choix=input(f"{J}Choix: {Z}").strip().lower()
         if choix=="1":
             envoyer_cli({"action":"admin_stats"});rep=attendre(10)
-            if rep and rep.get("ok") and "stats" in rep:
+            if rep and rep.get("ok"):
                 s=rep["stats"];titre("📊 STATISTIQUES")
                 print(f"  👤 Utilisateurs  : {B}{s.get('utilisateurs',0)}{Z}")
                 print(f"  🟢 En ligne      : {B}{s.get('en_ligne',0)}{Z}")
                 print(f"  💬 Conversations : {B}{s.get('conversations',0)}{Z}")
                 print(f"  👥 Groupes       : {B}{s.get('groupes',0)}{Z}")
-            else: erreur(rep.get("msg","Erreur") if rep else "Pas de reponse.")
+            else: erreur("Erreur.")
             entree()
         elif choix=="2":
             envoyer_cli({"action":"admin_users"});rep=attendre(15)

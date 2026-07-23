@@ -102,8 +102,8 @@ Deux façons de faire remonter une remarque, un bug ou une idée :
    l'inscription).
 3. **Tests automatisés** pour les actions serveur principales
    (inscription, connexion, envoi de message).
-4. **Documentation des actions du protocole** (`inscrire`, `connecter`,
-   `message`, etc.) dans un fichier `PROTOCOL.md`.
+4. **Documentation des actions du protocole** (`inscrire`, `connecter_numero`,
+   `connecter_email`, `message`, etc.) dans un fichier `PROTOCOL.md`.
 5. **Support d'un 6ème pays** avec son indicatif et sa validation.
 
 Si une tâche t'intéresse, ouvre une issue GitHub en précisant laquelle
