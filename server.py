@@ -14,7 +14,7 @@ import bcrypt
 try:
     import firebase_admin
     from firebase_admin import credentials, firestore
-    from google.cloud.firestore_v1.base_query import FieldFilter
+    # from google.cloud.firestore_v1.base_query import FieldFilter  # plus besoin
     FIREBASE_OK = True
 except ImportError:
     FIREBASE_OK = False
@@ -90,8 +90,12 @@ def init_firebase():
         return False
     try:
         if FIREBASE_CREDS:
-            creds_dict = json.loads(FIREBASE_CREDS)
-            cred = credentials.Certificate(creds_dict)
+            try:
+                creds_dict = json.loads(FIREBASE_CREDS)
+                cred = credentials.Certificate(creds_dict)
+            except Exception as e:
+                print(f"⚠️  FIREBASE_CREDS invalide: {e}")
+                return False
         elif os.path.exists("firebase-credentials.json"):
             cred = credentials.Certificate("firebase-credentials.json")
         else:
@@ -131,8 +135,11 @@ def est_premium_actif(user):
 
 def gen_numero(prefixe):
     if db:
-        users = db.collection("users").where(filter=FieldFilter("prefixe", "==", prefixe)).stream()
-        nums  = {u.to_dict().get("numero","") for u in users}
+        try:
+            users = db.collection("users").where("prefixe", "==", prefixe).stream()
+            nums  = {u.to_dict().get("numero","") for u in users}
+        except Exception:
+            nums = set()
     else:
         nums = set()
     while True:
@@ -140,13 +147,15 @@ def gen_numero(prefixe):
         if n not in nums:
             return n
 
+
+
 # ══════════════════════════════════════════════════════════
 #  OPÉRATIONS FIRESTORE
 # ══════════════════════════════════════════════════════════
 def fs_get_user_by_numero(numero):
     if not db: return None, None
     try:
-        docs = db.collection("users").where(filter=FieldFilter("numero", "==", numero)).limit(1).stream()
+        docs = db.collection("users").where("numero", "==", numero).limit(1).stream()
         for doc in docs:
             return doc.id, doc.to_dict()
         return None, None
@@ -156,7 +165,7 @@ def fs_get_user_by_numero(numero):
 def fs_get_user_by_nom(nom):
     if not db: return []
     try:
-        docs = db.collection("users").where(filter=FieldFilter("nom_lower", "==", nom.lower())).stream()
+        docs = db.collection("users").where("nom_lower", "==", nom.lower()).stream()
         return [(doc.id, doc.to_dict()) for doc in docs]
     except Exception as e:
         print(f"Firestore erreur: {e}"); return []
@@ -164,7 +173,7 @@ def fs_get_user_by_nom(nom):
 def fs_get_user_by_pseudo(pseudo):
     if not db: return None, None
     try:
-        docs = db.collection("users").where(filter=FieldFilter("pseudo_lower", "==", pseudo.lower().lstrip("@"))).limit(1).stream()
+        docs = db.collection("users").where("pseudo_lower", "==", pseudo.lower().lstrip("@")).limit(1).stream()
         for doc in docs:
             return doc.id, doc.to_dict()
         return None, None
@@ -174,7 +183,7 @@ def fs_get_user_by_pseudo(pseudo):
 def fs_get_user_by_email(email):
     if not db: return None, None
     try:
-        docs = db.collection("users").where(filter=FieldFilter("email_lower", "==", email.lower())).limit(1).stream()
+        docs = db.collection("users").where("email_lower", "==", email.lower()).limit(1).stream()
         for doc in docs:
             return doc.id, doc.to_dict()
         return None, None
@@ -228,6 +237,7 @@ def fs_save_message(cle_conv, msg):
 def fs_get_messages(n1, n2, limite=50):
     if not db: return []
     try:
+        if not n1 or not n2: return []
         cle = "_".join(sorted([n1, n2]))
         docs = db.collection("historique").document(cle)\
                  .collection("messages")\
@@ -246,8 +256,8 @@ def fs_marquer_lus(dest, exp):
         cle  = "_".join(sorted([dest, exp]))
         docs = db.collection("historique").document(cle)\
                  .collection("messages")\
-                 .where(filter=FieldFilter("vers", "==", dest))\
-                 .where(filter=FieldFilter("lu", "==", False)).stream()
+                 .where("vers", "==", dest)\
+                 .where("lu", "==", False).stream()
         batch = db.batch()
         for doc in docs:
             batch.update(doc.reference, {"lu": True})
@@ -260,7 +270,7 @@ def fs_mes_contacts(numero):
     try:
         contacts = set()
         convs = db.collection("historique")\
-                  .where(filter=FieldFilter("participants", "array_contains", numero)).stream()
+                  .where("participants", "array_contains", numero).stream()
         for conv in convs:
             data = conv.to_dict() or {}
             for part in data.get("participants", []):
@@ -274,12 +284,12 @@ def fs_compter_non_lus(numero):
     try:
         count = 0
         convs = db.collection("historique")\
-                  .where(filter=FieldFilter("participants", "array_contains", numero)).stream()
+                  .where("participants", "array_contains", numero).stream()
         for conv in convs:
             msgs = db.collection("historique").document(conv.id)\
                      .collection("messages")\
-                     .where(filter=FieldFilter("vers", "==", numero))\
-                     .where(filter=FieldFilter("lu", "==", False)).stream()
+                     .where("vers", "==", numero)\
+                     .where("lu", "==", False).stream()
             count += sum(1 for _ in msgs)
         return count
     except Exception as e:
@@ -289,7 +299,7 @@ def fs_get_conversations(numero):
     if not db: return []
     try:
         convs_ref = db.collection("historique")\
-                      .where(filter=FieldFilter("participants", "array_contains", numero))\
+                      .where("participants", "array_contains", numero)\
                       .order_by("derniere_activite", direction=firestore.Query.DESCENDING)\
                       .limit(20).stream()
         result = []
@@ -309,13 +319,14 @@ def fs_get_conversations(numero):
             non_lus = 0
             msgs_nl = db.collection("historique").document(cid)\
                         .collection("messages")\
-                        .where(filter=FieldFilter("vers","==",numero))\
-                        .where(filter=FieldFilter("lu","==",False)).stream()
+                        .where("vers","==",numero)\
+                        .where("lu","==",False).stream()
             for _ in msgs_nl: non_lus += 1
+            conv_data = conv.to_dict() or {}
             result.append({
                 "numero": autre, "nom": autre_user.get("nom","?"),
                 "dernier_msg": dernier_msg, "non_lus": non_lus,
-                "heure": conv.to_dict().get("derniere_activite","")[:16].replace("T"," ")
+                "heure": conv_data.get("derniere_activite","")[:16].replace("T"," ")
             })
         return result
     except Exception as e:
@@ -338,7 +349,7 @@ def fs_mes_groupes(numero):
     if not db: return []
     try:
         docs = db.collection("groupes")\
-                 .where(filter=FieldFilter("membres", "array_contains", numero)).stream()
+                 .where("membres", "array_contains", numero).stream()
         return [(doc.id, doc.to_dict()) for doc in docs]
     except Exception as e:
         print(f"Firestore erreur: {e}"); return []
@@ -446,7 +457,7 @@ def _connecter_user(conn, user, uid):
         if est_admin: admins_connectes.add(num_co)
 
     envoyer_srv(conn, {
-        "ok": True, "nom": user["nom"], "numero": num_co,
+        "ok": True, "nom": user.get("nom","?"), "numero": num_co,
         "pays": user.get("pays",""), "bio": user.get("bio",""),
         "couleur": user.get("couleur","cyan"),
         "statut": user.get("statut","disponible"),
@@ -456,6 +467,7 @@ def _connecter_user(conn, user, uid):
     })
     notifier_statut(num_co, True)
     return num_co, est_admin
+
 
 # ══════════════════════════════════════════════════════════
 #  GESTION D'UN CLIENT TCP
@@ -585,15 +597,9 @@ def gerer_client(conn, addr):
                     if num_co:
                         dest = p.get("dest","").strip()
                         _, user = fs_get_user_by_numero(num_co)
-                        if user: livrer(dest, {"type":"typing","de":user["nom"],"numero":num_co,"actif":p.get("actif",True)})
+                        if user: livrer(dest, {"type":"typing","de":user.get("nom","?"),"numero":num_co,"actif":p.get("actif",True)})
 
                 # ─── VERIFIER NUMERO / PSEUDO (usage interne uniquement) ──
-                # Utilise seulement pour confirmer qu'un contact existe avant
-                # de demarrer une conversation ou d'envoyer un fichier.
-                # Ne renvoie plus le profil complet (bio/pays/derniere connexion)
-                # pour empecher la recherche/collecte d'infos sur des inconnus.
-                # Correspondance EXACTE uniquement (pas de recherche partielle/
-                # navigation dans l'annuaire des utilisateurs).
                 elif act == "chercher":
                     if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
                     else:
@@ -607,17 +613,13 @@ def gerer_client(conn, addr):
                         else:
                             en_ligne = trouve["numero"] in clients
                             envoyer_srv(conn, {"ok":True,"user":{
-                                "nom":trouve["nom"],"numero":trouve["numero"],
+                                "nom":trouve.get("nom","?"),"numero":trouve["numero"],
                                 "pseudo":trouve.get("pseudo",""),
                                 "statut":trouve.get("statut","disponible"),
                                 "cle_publique":trouve.get("cle_publique"),
                                 "en_ligne":en_ligne}})
 
                 # ─── PUBLIER CLE PUBLIQUE (chiffrement E2E automatique) ──
-                # Le serveur ne stocke QUE la cle publique (X25519). La cle
-                # privee reste en local chez le client, jamais transmise.
-                # Sert a etablir un secret partage (ECDH) entre deux clients
-                # sans qu'un mot de passe ait besoin d'etre echange a la main.
                 elif act == "publier_cle_publique":
                     if not num_co:
                         envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
@@ -628,7 +630,8 @@ def gerer_client(conn, addr):
                             fs_update_user(uid, {"cle_publique": cle_pub})
                         envoyer_srv(conn, {"ok":True})
 
-                # ─── CONVERSATIONS ─────────────────────────
+
+# ─── CONVERSATIONS ─────────────────────────
                 elif act == "mes_conversations":
                     if num_co:
                         convs = fs_get_conversations(num_co)
@@ -661,9 +664,13 @@ def gerer_client(conn, addr):
                                     "type":"texte","heure":horodatage(),"lu":False,
                                     "chiffre":chiffre,"reply_to":reply_to
                                 }
-                                if expire_s: msg["expire_a"] = time.time()+int(expire_s)
+                                if expire_s:
+                                    try:
+                                        msg["expire_a"] = time.time()+int(expire_s)
+                                    except Exception:
+                                        pass
                                 fs_save_message(cle, msg)
-                                nom_exp = exp_user["nom"] if exp_user else "?"
+                                nom_exp = exp_user["nom"] if exp_user and exp_user.get("nom") else "?"
                                 livre = livrer(dest, {
                                     "type":"message","de":nom_exp,"numero":num_co,
                                     "texte":texte,"heure":heure(),"chiffre":chiffre,
@@ -677,7 +684,8 @@ def gerer_client(conn, addr):
                     if num_co:
                         dest  = p.get("dest","").strip(); msg_id = p.get("msg_id",""); emoji = p.get("emoji","👍")
                         _, exp_user = fs_get_user_by_numero(num_co)
-                        livrer(dest, {"type":"reaction","de":exp_user["nom"] if exp_user else "?",
+                        nom_de = exp_user.get("nom","?") if exp_user else "?"
+                        livrer(dest, {"type":"reaction","de":nom_de,
                                       "numero":num_co,"msg_id":msg_id,"emoji":emoji,"heure":heure()})
                         envoyer_srv(conn, {"ok":True})
 
@@ -696,8 +704,8 @@ def gerer_client(conn, addr):
                         _, eu = fs_get_user_by_numero(num_co)
                         _, au = fs_get_user_by_numero(avec)
                         noms  = {}
-                        if eu: noms[num_co] = eu["nom"]
-                        if au: noms[avec]   = au["nom"]
+                        if eu: noms[num_co] = eu.get("nom", num_co)
+                        if au: noms[avec]   = au.get("nom", avec)
                         for m in hist: m["nom_de"] = noms.get(m["de"], m["de"])
                         fs_marquer_lus(num_co, avec)
                         livrer(avec, {"type":"lu","par":num_co})
@@ -737,7 +745,7 @@ def gerer_client(conn, addr):
                             for num, sock in cibles:
                                 if num != num_co:
                                     envoyer_srv(sock, {"type":"statut_change","numero":num_co,
-                                                       "nom":eu["nom"] if eu else "?","statut":statut})
+                                                       "nom":eu.get("nom","?") if eu else "?","statut":statut})
                             envoyer_srv(conn, {"ok":True,"msg":f"Statut: {statut}"})
 
                 # ─── FAVORIS ──────────────────────────────
@@ -759,7 +767,7 @@ def gerer_client(conn, addr):
                         result = []
                         for n in favoris:
                             _, u = fs_get_user_by_numero(n)
-                            if u: result.append({"nom":u["nom"],"numero":n,
+                            if u: result.append({"nom":u.get("nom","?"),"numero":n,
                                 "statut":u.get("statut","disponible"),"en_ligne":n in ens})
                         envoyer_srv(conn, {"ok":True,"favoris":result})
 
@@ -788,6 +796,7 @@ def gerer_client(conn, addr):
                         uid, _ = fs_get_user_by_numero(num_co)
                         if uid: fs_update_user(uid, {"bio":bio}); envoyer_srv(conn, {"ok":True,"msg":"Bio mise a jour!"})
 
+
                 # ─── FEEDBACK (message au developpeur) ────
                 elif act == "envoyer_feedback":
                     if not num_co:
@@ -804,7 +813,7 @@ def gerer_client(conn, addr):
                                 envoyer_srv(conn, {"ok":False,"msg":"Message trop court."})
                             else:
                                 _, user = fs_get_user_by_numero(num_co)
-                                fs_save_feedback(num_co, user["nom"] if user else "?", texte)
+                                fs_save_feedback(num_co, user.get("nom","?") if user else "?", texte)
                                 with lock: dernier_feedback[num_co] = time.time()
                                 envoyer_srv(conn, {"ok":True,"msg":"Merci! Ton message a bien ete transmis au developpeur."})
 
@@ -856,7 +865,11 @@ def gerer_client(conn, addr):
                     if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
                     else:
                         dest=p.get("dest","").strip(); nom_fich=p.get("nom_fichier","fichier")
-                        c64=p.get("contenu",""); taille=p.get("taille",0)
+                        c64=p.get("contenu",""); taille_raw=p.get("taille",0)
+                        try:
+                            taille = int(taille_raw or 0)
+                        except Exception:
+                            envoyer_srv(conn, {"ok":False,"msg":"Taille invalide."}); continue
                         _, exp_user  = fs_get_user_by_numero(num_co)
                         _, dest_user = fs_get_user_by_numero(dest)
                         if taille>50*1024*1024: envoyer_srv(conn, {"ok":False,"msg":"Max 50 MB."})
@@ -865,7 +878,8 @@ def gerer_client(conn, addr):
                             safe   = "".join(c for c in nom_fich if c.isalnum() or c in "._-") or "fichier"
                             chemin = os.path.join(FILES_DIR, f"{int(time.time())}_{safe}")
                             try:
-                                with open(chemin,"wb") as f: f.write(base64.b64decode(c64))
+                                with open(chemin,"wb") as f:
+                                    f.write(base64.b64decode(c64))
                                 cle    = "_".join(sorted([num_co, dest]))
                                 msg_id = f"{int(time.time())}_{random.randint(1000,9999)}"
                                 # On ne stocke pas le contenu base64 (trop volumineux pour Firestore),
@@ -877,7 +891,8 @@ def gerer_client(conn, addr):
                                     "chiffre":False,"taille":taille
                                 }
                                 fs_save_message(cle, msg)
-                                livre = livrer(dest, {"type":"fichier","de":exp_user["nom"] if exp_user else "?",
+                                nom_exp = exp_user.get("nom","?") if exp_user else "?"
+                                livre = livrer(dest, {"type":"fichier","de":nom_exp,
                                     "numero":num_co,"nom_fichier":nom_fich,"contenu":c64,"taille":taille,"heure":heure(),"msg_id":msg_id})
                                 envoyer_srv(conn, {"ok":True,"livre":livre,"msg_id":msg_id,"msg":f"'{nom_fich}' envoye."})
                             except Exception as e: envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
@@ -887,7 +902,15 @@ def gerer_client(conn, addr):
                     if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
                     else:
                         dest=p.get("dest","").strip(); c64=p.get("contenu","")
-                        taille=p.get("taille",0); duree=p.get("duree",0)
+                        taille_raw=p.get("taille",0); duree_raw=p.get("duree",0)
+                        try:
+                            taille = int(taille_raw or 0)
+                        except Exception:
+                            envoyer_srv(conn, {"ok":False,"msg":"Taille invalide."}); continue
+                        try:
+                            duree = int(duree_raw or 0)
+                        except Exception:
+                            duree = 0
                         _, exp_user  = fs_get_user_by_numero(num_co)
                         _, dest_user = fs_get_user_by_numero(dest)
                         if taille>50*1024*1024: envoyer_srv(conn, {"ok":False,"msg":"Max 50 MB."})
@@ -905,7 +928,8 @@ def gerer_client(conn, addr):
                                     "chiffre":False,"taille":taille,"duree":duree
                                 }
                                 fs_save_message(cle, msg)
-                                livre=livrer(dest, {"type":"vocal","de":exp_user["nom"] if exp_user else "?",
+                                nom_exp = exp_user.get("nom","?") if exp_user else "?"
+                                livre=livrer(dest, {"type":"vocal","de":nom_exp,
                                     "numero":num_co,"nom_fichier":nom_fich,"contenu":c64,"duree":duree,"taille":taille,"heure":heure(),"msg_id":msg_id})
                                 envoyer_srv(conn, {"ok":True,"livre":livre,"msg_id":msg_id,"msg":"Vocal envoye!"})
                             except Exception as e: envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
@@ -917,7 +941,7 @@ def gerer_client(conn, addr):
                     for n in liste:
                         if n == num_co: continue
                         _, u = fs_get_user_by_numero(n)
-                        if u: result.append({"numero":n,"nom":u["nom"],"statut":u.get("statut","disponible")})
+                        if u: result.append({"numero":n,"nom":u.get("nom","?"),"statut":u.get("statut","disponible")})
                     envoyer_srv(conn, {"ok":True,"users":result})
 
                 # ─── GROUPES ──────────────────────────────
@@ -948,7 +972,7 @@ def gerer_client(conn, addr):
                                 continue
                             membres = membres_actuels+[cible]
                             if db: db.collection("groupes").document(gid).update({"membres":membres})
-                            livrer(cible, {"type":"invitation_groupe","groupe":groupe["nom"],"id_groupe":gid,"heure":heure()})
+                            livrer(cible, {"type":"invitation_groupe","groupe":groupe.get("nom","?"),"id_groupe":gid,"heure":heure()})
                             envoyer_srv(conn, {"ok":True,"msg":"Membre ajoute!"})
 
                 elif act == "msg_groupe":
@@ -957,18 +981,18 @@ def gerer_client(conn, addr):
                         groupe = fs_get_groupe(gid)
                         if groupe and num_co in groupe.get("membres",[]) and texte:
                             _, eu = fs_get_user_by_numero(num_co)
-                            msg  = {"de":num_co,"nom":eu["nom"] if eu else "?","texte":texte,"heure":horodatage(),"reply_to":reply}
+                            msg  = {"de":num_co,"nom":eu.get("nom","?") if eu else "?","texte":texte,"heure":horodatage(),"reply_to":reply}
                             fs_save_msg_groupe(gid, msg)
                             for m in groupe.get("membres",[]):
-                                if m!=num_co: livrer(m, {"type":"msg_groupe","groupe":groupe["nom"],"id_groupe":gid,
-                                    "de":eu["nom"] if eu else "?","numero":num_co,"texte":texte,"heure":heure(),"reply_to":reply})
+                                if m!=num_co: livrer(m, {"type":"msg_groupe","groupe":groupe.get("nom","?"),"id_groupe":gid,
+                                    "de":eu.get("nom","?") if eu else "?","numero":num_co,"texte":texte,"heure":heure(),"reply_to":reply})
                             envoyer_srv(conn, {"ok":True})
                         else: envoyer_srv(conn, {"ok":False,"msg":"Groupe introuvable ou non membre."})
 
                 elif act == "mes_groupes":
                     if num_co:
                         groupes = fs_mes_groupes(num_co)
-                        result  = [{"id":gid,"nom":g["nom"],"membres":len(g.get("membres",[])),"createur":g["createur"]==num_co}
+                        result  = [{"id":gid,"nom":g.get("nom","?"),"membres":len(g.get("membres",[])),"createur":g.get("createur")==num_co}
                                    for gid,g in groupes]
                         envoyer_srv(conn, {"ok":True,"groupes":result})
 
@@ -980,7 +1004,7 @@ def gerer_client(conn, addr):
                         elif groupe["createur"]!=num_co: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                         else:
                             if db: db.collection("groupes").document(gid).update({"epingle":texte})
-                            for m in groupe.get("membres",[]): livrer(m, {"type":"epingle","groupe":groupe["nom"],"texte":texte,"heure":heure()})
+                            for m in groupe.get("membres",[]): livrer(m, {"type":"epingle","groupe":groupe.get("nom","?"),"texte":texte,"heure":heure()})
                             envoyer_srv(conn, {"ok":True,"msg":"Message epingle!"})
 
                 # ─── PREMIUM (abonnement) ──────────────────
@@ -1055,10 +1079,10 @@ def gerer_client(conn, addr):
                                 docs  = db.collection("users").stream()
                                 users = []
                                 for doc in docs:
-                                    u = doc.to_dict()
-                                    users.append({"nom":u["nom"],"numero":u["numero"],"pays":u.get("pays",""),
+                                    u = doc.to_dict() or {}
+                                    users.append({"nom":u.get("nom","?"),"numero":u.get("numero","?"),"pays":u.get("pays",""),
                                         "inscription":(u.get("inscription") or "")[:10],
-                                        "en_ligne":u["numero"] in ens})
+                                        "en_ligne":u.get("numero") in ens})
                                 envoyer_srv(conn, {"ok":True,"users":users})
                             except Exception as e: envoyer_srv(conn, {"ok":False,"msg":str(e)})
 
