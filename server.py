@@ -1,3 +1,4 @@
+from google.cloud.firestore_v1.base_query import FieldFilter
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -136,7 +137,7 @@ def est_premium_actif(user):
 def gen_numero(prefixe):
     if db:
         try:
-            users = db.collection("users").where("prefixe", "==", prefixe).stream()
+            users = db.collection("users").where(filter=FieldFilter("prefixe", "==", prefixe)).stream()
             nums  = {u.to_dict().get("numero","") for u in users}
         except Exception:
             nums = set()
@@ -155,7 +156,7 @@ def gen_numero(prefixe):
 def fs_get_user_by_numero(numero):
     if not db: return None, None
     try:
-        docs = db.collection("users").where("numero", "==", numero).limit(1).stream()
+        docs = db.collection("users").where(filter=FieldFilter("numero", "==", numero)).limit(1).stream()
         for doc in docs:
             return doc.id, doc.to_dict()
         return None, None
@@ -165,7 +166,7 @@ def fs_get_user_by_numero(numero):
 def fs_get_user_by_nom(nom):
     if not db: return []
     try:
-        docs = db.collection("users").where("nom_lower", "==", nom.lower()).stream()
+        docs = db.collection("users").where(filter=FieldFilter("nom_lower", "==", nom.lower())).stream()
         return [(doc.id, doc.to_dict()) for doc in docs]
     except Exception as e:
         print(f"Firestore erreur: {e}"); return []
@@ -173,7 +174,7 @@ def fs_get_user_by_nom(nom):
 def fs_get_user_by_pseudo(pseudo):
     if not db: return None, None
     try:
-        docs = db.collection("users").where("pseudo_lower", "==", pseudo.lower().lstrip("@")).limit(1).stream()
+        docs = db.collection("users").where(filter=FieldFilter("pseudo_lower", "==", pseudo.lower().lstrip("@"))).limit(1).stream()
         for doc in docs:
             return doc.id, doc.to_dict()
         return None, None
@@ -183,7 +184,7 @@ def fs_get_user_by_pseudo(pseudo):
 def fs_get_user_by_email(email):
     if not db: return None, None
     try:
-        docs = db.collection("users").where("email_lower", "==", email.lower()).limit(1).stream()
+        docs = db.collection("users").where(filter=FieldFilter("email_lower", "==", email.lower())).limit(1).stream()
         for doc in docs:
             return doc.id, doc.to_dict()
         return None, None
@@ -256,8 +257,8 @@ def fs_marquer_lus(dest, exp):
         cle  = "_".join(sorted([dest, exp]))
         docs = db.collection("historique").document(cle)\
                  .collection("messages")\
-                 .where("vers", "==", dest)\
-                 .where("lu", "==", False).stream()
+                 .where(filter=FieldFilter("vers", "==", dest))\
+                 .where(filter=FieldFilter("lu", "==", False)).stream()
         batch = db.batch()
         for doc in docs:
             batch.update(doc.reference, {"lu": True})
@@ -270,7 +271,7 @@ def fs_mes_contacts(numero):
     try:
         contacts = set()
         convs = db.collection("historique")\
-                  .where("participants", "array_contains", numero).stream()
+                  .where(filter=FieldFilter("participants", "array_contains", numero)).stream()
         for conv in convs:
             data = conv.to_dict() or {}
             for part in data.get("participants", []):
@@ -284,12 +285,12 @@ def fs_compter_non_lus(numero):
     try:
         count = 0
         convs = db.collection("historique")\
-                  .where("participants", "array_contains", numero).stream()
+                  .where(filter=FieldFilter("participants", "array_contains", numero)).stream()
         for conv in convs:
             msgs = db.collection("historique").document(conv.id)\
                      .collection("messages")\
-                     .where("vers", "==", numero)\
-                     .where("lu", "==", False).stream()
+                     .where(filter=FieldFilter("vers", "==", numero))\
+                     .where(filter=FieldFilter("lu", "==", False)).stream()
             count += sum(1 for _ in msgs)
         return count
     except Exception as e:
@@ -299,7 +300,7 @@ def fs_get_conversations(numero):
     if not db: return []
     try:
         convs_ref = db.collection("historique")\
-                      .where("participants", "array_contains", numero)\
+                      .where(filter=FieldFilter("participants", "array_contains", numero))\
                       .order_by("derniere_activite", direction=firestore.Query.DESCENDING)\
                       .limit(20).stream()
         result = []
@@ -319,8 +320,8 @@ def fs_get_conversations(numero):
             non_lus = 0
             msgs_nl = db.collection("historique").document(cid)\
                         .collection("messages")\
-                        .where("vers","==",numero)\
-                        .where("lu","==",False).stream()
+                        .where(filter=FieldFilter("vers", "==", numero))\
+                        .where(filter=FieldFilter("lu", "==", False)).stream()
             for _ in msgs_nl: non_lus += 1
             conv_data = conv.to_dict() or {}
             result.append({
@@ -349,7 +350,7 @@ def fs_mes_groupes(numero):
     if not db: return []
     try:
         docs = db.collection("groupes")\
-                 .where("membres", "array_contains", numero).stream()
+                 .where(filter=FieldFilter("membres", "array_contains", numero)).stream()
         return [(doc.id, doc.to_dict()) for doc in docs]
     except Exception as e:
         print(f"Firestore erreur: {e}"); return []
