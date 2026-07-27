@@ -958,8 +958,8 @@ def quitter(sig=None, frame=None):
 def main():
     global sock_cli, en_cours, ma_cle_privee
     banniere()
-    host = sys.argv[1] if len(sys.argv) >= 2 else "reseau.proxy.rlwy.net"
-    port = int(sys.argv[2]) if len(sys.argv) >= 3 else 29543
+    host = sys.argv[1] if len(sys.argv) >= 2 else "ballast.proxy.rlwy.net"
+    port = int(sys.argv[2]) if len(sys.argv) >= 3 else 57568
     print(f"{G}🔌 Connexion a {host}:{port}...{Z}")
     try:
         sock_cli = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
