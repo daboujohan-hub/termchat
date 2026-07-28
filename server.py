@@ -675,7 +675,8 @@ def gerer_client(conn, addr):
                                 livre = livrer(dest, {
                                     "type":"message","de":nom_exp,"numero":num_co,
                                     "texte":texte,"heure":heure(),"chiffre":chiffre,
-                                    "reply_to":reply_to,"msg_id":msg_id
+                                    "reply_to":reply_to,"msg_id":msg_id,
+                                    "premium":est_premium_actif(exp_user)
                                 })
                                 envoyer_srv(conn, {"ok":True,"livre":livre,"msg_id":msg_id})
                                 if livre: livrer(num_co, {"type":"livre","dest":dest,"msg_id":msg_id})
