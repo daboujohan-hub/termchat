@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """TermChat v6.0 — Client — by Aboudev Labs CI"""
@@ -270,7 +271,8 @@ def afficher_entrant(p):
             else:
                 texte = "🔒 [Chiffre - ouvre la conversation pour etablir la cle]"
         beep(); reply = p.get("reply_to")
-        print(f"\n{V}{B}[{h}] 💬 {p.get('de','?')} ({num_exp}){Z}")
+        badge_p = " ✨" if p.get("premium") else ""
+        print(f"\n{V}{B}[{h}] 💬 {p.get('de','?')}{badge_p} ({num_exp}){Z}")
         if reply: print(f"{G}     ↩️  {reply[:40]}{Z}")
         print(f"     {texte}")
         if p.get("chiffre"): print(f"{G}     🔐 Chiffre{Z}")
