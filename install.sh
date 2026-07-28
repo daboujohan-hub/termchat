@@ -21,6 +21,6 @@ EOL
 
 chmod +x "$PREFIX/bin/termchat" "$PREFIX/bin/termchat.py"
 
-echo "✅ TermChat installé ! Lancement..."
+echo "✅ TermChat installé !"
+echo "👉 Lance-le avec la commande : termchat"
 echo ""
-termchat
