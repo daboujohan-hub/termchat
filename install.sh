@@ -1,18 +1,29 @@
 #!/bin/bash
+echo ""
 echo "╔══════════════════════════════════════════════╗"
 echo "║  💬  TERMCHAT v6.0 — Installation           ║"
 echo "║  by Aboudev Labs 🇨🇮                         ║"
 echo "╚══════════════════════════════════════════════╝"
-echo "📦 Installation des dependances..."
-if command -v pkg >/dev/null 2>&1; then
-    # Termux : paquet precompile, evite de compiler cryptography via Rust/maturin
-    pkg install -y python-cryptography >/dev/null 2>&1
-fi
-python3 -c "from cryptography.fernet import Fernet" 2>/dev/null || {
-    # cryptography installe mais cffi (dependance native) manquant, ou pkg absent
-    pip install --break-system-packages -q cffi cryptography 2>/dev/null || pip install -q cffi cryptography
-}
-python3 -c "from cryptography.fernet import Fernet" 2>/dev/null && echo "✅ Chiffrement pret." || echo "⚠️  cryptography indisponible - le chiffrement des messages ne fonctionnera pas."
-curl -s https://raw.githubusercontent.com/daboujohan-hub/termchat/main/termchat.py -o $PREFIX/bin/termchat
-chmod +x $PREFIX/bin/termchat
-echo "✅ Installe! Lance: termchat"
+echo ""
+
+curl -s https://raw.githubusercontent.com/daboujohan-hub/termchat/main/termchat.py -o "$PREFIX/bin/termchat.py"
+
+# Nettoyage au cas où le fichier source contienne un BOM UTF-8 ou des CRLF
+sed -i '1s/^\xEF\xBB\xBF//' "$PREFIX/bin/termchat.py"
+sed -i 's/\r$//' "$PREFIX/bin/termchat.py"
+
+sed -i 's/127.0.0.1/junction.proxy.rlwy.net/g' "$PREFIX/bin/termchat.py"
+sed -i 's/else 9999/else 35030/g' "$PREFIX/bin/termchat.py"
+
+# Wrapper qui appelle python3 explicitement (évite les soucis de shebang)
+cat > "$PREFIX/bin/termchat" << 'EOF'
+#!/data/data/com.termux/files/usr/bin/bash
+exec python3 "$PREFIX/bin/termchat.py" "$@"
+EOF
+
+chmod +x "$PREFIX/bin/termchat" "$PREFIX/bin/termchat.py"
+
+echo "✅ TermChat installé ! Lancement..."
+echo ""
+termchat
+
