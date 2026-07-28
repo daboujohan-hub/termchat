@@ -8,22 +8,19 @@ echo ""
 
 curl -s https://raw.githubusercontent.com/daboujohan-hub/termchat/main/termchat.py -o "$PREFIX/bin/termchat.py"
 
-# Nettoyage au cas où le fichier source contienne un BOM UTF-8 ou des CRLF
 sed -i '1s/^\xEF\xBB\xBF//' "$PREFIX/bin/termchat.py"
 sed -i 's/\r$//' "$PREFIX/bin/termchat.py"
 
 sed -i 's/127.0.0.1/junction.proxy.rlwy.net/g' "$PREFIX/bin/termchat.py"
 sed -i 's/else 9999/else 35030/g' "$PREFIX/bin/termchat.py"
 
-# Wrapper qui appelle python3 explicitement (évite les soucis de shebang)
-cat > "$PREFIX/bin/termchat" << 'EOF'
+cat > "$PREFIX/bin/termchat" << 'EOL'
 #!/data/data/com.termux/files/usr/bin/bash
 exec python3 "$PREFIX/bin/termchat.py" "$@"
-EOF
+EOL
 
 chmod +x "$PREFIX/bin/termchat" "$PREFIX/bin/termchat.py"
 
 echo "✅ TermChat installé ! Lancement..."
 echo ""
 termchat
-
