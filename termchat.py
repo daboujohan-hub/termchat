@@ -187,6 +187,18 @@ def dechiffrer(t64, cle):
 def clear(): os.system("clear" if os.name != "nt" else "cls")
 def beep(): print("\a", end="", flush=True)
 def get_C(): return COULEURS.get(session.get("couleur", "cyan"), "\033[96m")
+
+def get_theme():
+    """Retourne (couleur_ansi, label, ligne_extra) selon le profil de l'utilisateur."""
+    pt = session.get("premium_type")
+    if pt == "fondateur":
+        return ("\033[93m", "Fondateur 🏆", "Merci de faire partie de l'aventure")
+    elif pt == "annuel":
+        return ("\033[95m", "Premium 💎", "Abonnement annuel · Support prio")
+    elif pt == "mensuel" or session.get("premium"):
+        return ("\033[96m", "Premium ✨", "Abonnement mensuel actif")
+    else:
+        return ("\033[97m", "Compte Gratuit", "")
 def fmt(o):
     if o < 1024: return f"{o} o"
     elif o < 1024**2: return f"{o//1024} Ko"
@@ -200,8 +212,18 @@ def info(m): print(f"{J}ℹ️   {m}{Z}")
 def entree(): input(f"\n{G}[Entree pour continuer]{Z}")
 
 def banniere():
-    clear(); C2 = get_C()
-    print(f"""{C2}{B}
+    clear()
+    if session.get("connecte"):
+        couleur_t, label_t, extra_t = get_theme()
+        ligne_extra = f"║   {extra_t:<43}║\n" if extra_t else ""
+        print(f"""{couleur_t}{B}
+ ╔══════════════════════════════════════════════╗
+ ║   💬  TERMCHAT — {label_t:<28}║
+{ligne_extra} ╚══════════════════════════════════════════════╝{Z}
+ """)
+    else:
+        C2 = get_C()
+        print(f"""{C2}{B}
  ╔══════════════════════════════════════════════╗
  ║                                              ║
  ║   💬   T E R M C H A T   v6.0              ║
@@ -271,7 +293,11 @@ def afficher_entrant(p):
             else:
                 texte = "🔒 [Chiffre - ouvre la conversation pour etablir la cle]"
         beep(); reply = p.get("reply_to")
-        badge_p = " ✨" if p.get("premium") else ""
+        _pt = p.get("premium_type")
+        if _pt == "fondateur": badge_p = " 🏆"
+        elif _pt == "annuel": badge_p = " 💎"
+        elif p.get("premium"): badge_p = " ✨"
+        else: badge_p = ""
         print(f"\n{V}{B}[{h}] 💬 {p.get('de','?')}{badge_p} ({num_exp}){Z}")
         if reply: print(f"{G}     ↩️  {reply[:40]}{Z}")
         print(f"     {texte}")
@@ -346,6 +372,10 @@ def afficher_entrant(p):
         beep(); beep()
         print(f"\n{J}{B}📢 ANNONCE [{h}]: {p.get('msg','')}{Z}")
         print(f"{G}> {Z}", end="", flush=True)
+    elif t == "message_admin":
+        beep(); beep()
+        print(f"\n{M}{B}📩 MESSAGE ADMIN [{h}]: {p.get('msg','')}{Z}")
+        print(f"{G}> {Z}", end="", flush=True)
     elif t == "timeout":
         print(f"\n{J}⏱️  {p.get('msg','Deconnecte.')}{Z}")
         en_cours = False
@@ -375,7 +405,7 @@ def menu_principal():
     print(f"  {C2}1{Z} — 💬  Messages")
     print(f"  {C2}2{Z} — 👥  Groupes")
     print(f"  {C2}3{Z} — ⭐  Favoris")
-    print(f"  {C2}4{Z} — 📎  Envoyer un fichier")
+    if session.get("premium"): print(f"  {C2}4{Z} — 📎  Envoyer un fichier")
     print(f"  {C2}6{Z} — 🌐  En ligne")
     print(f"  {C2}7{Z} — 👤  Mon profil")
     print(f"  {C2}8{Z} — 😊  Statut")
@@ -443,7 +473,8 @@ def _finaliser_connexion(rep):
         "connecte": True, "nom": rep.get("nom"), "numero": rep.get("numero"),
         "pays": rep.get("pays",""), "bio": rep.get("bio",""), "couleur": rep.get("couleur","cyan"),
         "statut": rep.get("statut","disponible"), "est_admin": rep.get("est_admin", False),
-        "non_lus": rep.get("non_lus", 0), "a_pin": rep.get("a_pin", False), "pseudo": rep.get("pseudo","")
+        "non_lus": rep.get("non_lus", 0), "a_pin": rep.get("a_pin", False), "pseudo": rep.get("pseudo",""),
+        "premium": rep.get("premium", False), "premium_type": rep.get("premium_type")
     })
     global ma_cle_privee
     ma_cle_privee = charger_ou_creer_identite()
@@ -571,6 +602,17 @@ def _ouvrir_chat(nd):
         if texte.startswith("/vocal "):
             mid = _envoyer_vocal(nd, texte[7:].strip())
             if mid: dernier_msg_id = mid
+            continue
+        if texte.startswith("/payer "):
+            parts = texte[7:].strip().split()
+            if len(parts) < 2:
+                erreur("Usage: /payer <code_transaction> <montant>")
+            else:
+                code_t, montant = parts[0], parts[1]
+                envoyer_cli({"action":"soumettre_paiement","code_transaction":code_t,"montant":montant})
+                rep = attendre()
+                if rep and rep.get("ok"): succes(rep.get("msg",""))
+                else: erreur(rep.get("msg","?") if rep else "?")
             continue
         if texte.startswith("/auto "):
             try:
@@ -857,13 +899,21 @@ def menu_securite():
             titre("⭐ MON ABONNEMENT")
             if rep and rep.get("ok"):
                 if rep.get("premium"):
-                    exp = (rep.get("premium_expire") or "")[:10]
-                    print(f"  {V}✅ Premium actif ({rep.get('premium_type','?')}){Z}")
-                    print(f"  Expire le : {B}{exp}{Z}")
+                    pt = rep.get("premium_type","?")
+                    if pt == "fondateur":
+                        print(f"  {J}🏆 Fondateur — premium a vie{Z}")
+                    else:
+                        exp = (rep.get("premium_expire") or "")[:10]
+                        print(f"  {V}✅ Premium actif ({pt}){Z}")
+                        print(f"  Expire le : {B}{exp}{Z}")
                 else:
-                    print(f"  {G}Compte gratuit — groupes limites a 5 membres.{Z}")
-                    print(f"  Pour passer premium: envoie ton paiement Mobile Money")
-                    print(f"  au developpeur puis attends l'activation.")
+                    print(f"  {G}Compte gratuit — limites: 5 contacts, pas de fichiers,{Z}")
+                    print(f"  {G}150 caracteres max par message, groupes a 5 membres.{Z}")
+                    print()
+                    print(f"  {J}Pour passer premium (500 FCFA/mois ou 8000 FCFA/an):{Z}")
+                    print(f"  1. Envoie le paiement via {B}Wave ou Moov{Z} au {B}+2250170404109{Z}")
+                    print(f"  2. Tape: {B}/payer <code_transaction> <montant>{Z} dans une conversation")
+                    print(f"  3. L'admin verifie et active ton premium sous peu.")
             else: erreur("Erreur.")
             entree()
         elif choix == "r": break
@@ -882,6 +932,8 @@ def panel_admin():
         print(f"  {C2}4{Z} — ⛔  Kick utilisateur")
         print(f"  {C2}5{Z} — 💌  Feedback recus")
         print(f"  {C2}6{Z} — ⭐  Gerer premium (activer/desactiver)")
+        print(f"  {C2}7{Z} — 📩  Message a un utilisateur")
+        print(f"  {C2}8{Z} — 💰  Paiements en attente")
         print(f"  {C2}r{Z} — 🔙  Retour\n")
         choix = input(f"{J}Choix: {Z}").strip().lower()
         if choix == "1":
@@ -915,6 +967,43 @@ def panel_admin():
             envoyer_cli({"action":"admin_kick","numero":numero}); rep = attendre()
             if rep and rep.get("ok"): succes(rep.get("msg",""))
             else: erreur(rep.get("msg","?") if rep else "?")
+            entree()
+        elif choix == "7":
+            numero = input("Numero du destinataire: ").strip()
+            texte = input("Message: ").strip()
+            if not texte: continue
+            envoyer_cli({"action":"admin_message","numero":numero,"texte":texte}); rep = attendre()
+            if rep and rep.get("ok"): succes(rep.get("msg",""))
+            else: erreur(rep.get("msg","?") if rep else "?")
+            entree()
+        elif choix == "8":
+            envoyer_cli({"action":"admin_paiements_attente"}); rep = attendre(10)
+            if rep and rep.get("ok"):
+                paie = rep.get("paiements", [])
+                titre(f"💰 PAIEMENTS EN ATTENTE ({len(paie)})")
+                if not paie:
+                    print(f"  {G}Aucun paiement en attente.{Z}")
+                else:
+                    for pmt in paie:
+                        print(f"  {C2}[{pmt.get('id')}]{Z} {pmt.get('nom','?')} ({pmt.get('numero','')})")
+                        print(f"     Code: {pmt.get('code_transaction','')}  Montant: {pmt.get('montant','')} FCFA  {G}{pmt.get('heure','')}{Z}")
+                    print()
+                    pid = input("ID a traiter (vide pour annuler): ").strip()
+                    if pid:
+                        action_p = input("c = confirmer / r = rejeter: ").strip().lower()
+                        if action_p == "c":
+                            cible_p = input("Numero de l'utilisateur: ").strip()
+                            type_p = input("Type (mensuel/annuel/fondateur): ").strip() or "mensuel"
+                            envoyer_cli({"action":"admin_confirmer_paiement","id":pid,"numero":cible_p,"type":type_p})
+                            rep2 = attendre()
+                            if rep2 and rep2.get("ok"): succes(rep2.get("msg",""))
+                            else: erreur(rep2.get("msg","?") if rep2 else "?")
+                        elif action_p == "r":
+                            envoyer_cli({"action":"admin_rejeter_paiement","id":pid})
+                            rep2 = attendre()
+                            if rep2 and rep2.get("ok"): succes(rep2.get("msg",""))
+                            else: erreur(rep2.get("msg","?") if rep2 else "?")
+            else: erreur("Erreur.")
             entree()
         elif choix == "5":
             envoyer_cli({"action":"admin_feedback"}); rep = attendre(10)

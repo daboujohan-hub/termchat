@@ -127,9 +127,10 @@ def horodatage(): return datetime.datetime.now().isoformat()
 def heure():      return datetime.datetime.now().strftime("%H:%M")
 
 def est_premium_actif(user):
-    """True si le compte a un premium actif et non expire."""
+    """True si le compte a un premium actif et non expire (ou a vie)."""
     if not user or not user.get("premium"): return False
     exp = user.get("premium_expire")
+    if exp is None and user.get("premium_type") == "fondateur": return True
     if not exp: return False
     try: return datetime.datetime.fromisoformat(exp) > datetime.datetime.now()
     except Exception: return False
@@ -206,15 +207,44 @@ def fs_delete_user(uid):
     try: db.collection("users").document(uid).delete()
     except Exception as e: print(f"Firestore erreur: {e}")
 
-def fs_save_feedback(numero, nom, texte):
+def fs_save_feedback(numero, nom, texte, prioritaire=False):
     if not db: return
     try:
         fid = f"fb_{int(time.time())}_{random.randint(1000,9999)}"
         db.collection("feedback").document(fid).set({
             "numero": numero, "nom": nom, "texte": texte,
-            "heure": horodatage(), "lu": False
+            "heure": horodatage(), "lu": False, "prioritaire": prioritaire
         })
     except Exception as e: print(f"Firestore erreur: {e}")
+
+def fs_save_paiement_attente(numero, nom, code_transaction, montant):
+    if not db: return None
+    try:
+        pid = f"pay_{int(time.time())}_{random.randint(1000,9999)}"
+        db.collection("paiements_attente").document(pid).set({
+            "numero": numero, "nom": nom, "code_transaction": code_transaction,
+            "montant": montant, "heure": horodatage(), "statut": "attente"
+        })
+        return pid
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return None
+
+def fs_get_paiements_attente():
+    if not db: return []
+    try:
+        docs = db.collection("paiements_attente")\
+                  .where(filter=FieldFilter("statut", "==", "attente"))\
+                  .order_by("heure").stream()
+        return [{**d.to_dict(), "id": d.id} for d in docs]
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return []
+
+def fs_update_paiement(pid, statut):
+    if not db: return
+    try:
+        db.collection("paiements_attente").document(pid).update({"statut": statut})
+    except Exception as e:
+        print(f"Firestore erreur: {e}")
 
 def fs_get_feedback(limite=30):
     if not db: return []
@@ -295,6 +325,17 @@ def fs_compter_non_lus(numero):
         return count
     except Exception as e:
         print(f"Firestore erreur: {e}"); return 0
+
+def fs_compter_contacts_distincts(numero):
+    """Compte le nombre de conversations distinctes (contacts) d'un utilisateur."""
+    if not db: return 0
+    try:
+        docs = db.collection("historique")\
+                  .where(filter=FieldFilter("participants", "array_contains", numero))\
+                  .stream()
+        return sum(1 for _ in docs)
+    except Exception:
+        return 0
 
 def fs_get_conversations(numero):
     if not db: return []
@@ -464,7 +505,9 @@ def _connecter_user(conn, user, uid):
         "statut": user.get("statut","disponible"),
         "est_admin": est_admin, "non_lus": non_lus,
         "a_pin": bool(user.get("pin")),
-        "pseudo": user.get("pseudo","")
+        "pseudo": user.get("pseudo",""),
+        "premium": est_premium_actif(user),
+        "premium_type": user.get("premium_type")
     })
     notifier_statut(num_co, True)
     return num_co, est_admin
@@ -653,10 +696,17 @@ def gerer_client(conn, addr):
                         else:
                             _, exp_user  = fs_get_user_by_numero(num_co)
                             _, dest_user = fs_get_user_by_numero(dest)
+                            if not est_premium_actif(exp_user) and len(texte) > 150:
+                                envoyer_srv(conn, {"ok":False,"msg":"Message trop long (max 150 caracteres en gratuit). Passe premium pour debloquer."})
+                                continue
+                            cle_verif = "_".join(sorted([num_co, dest]))
+                            nouveau_contact = db.collection("historique").document(cle_verif).get().exists == False if db else False
                             if not dest_user:
                                 envoyer_srv(conn, {"ok":False,"msg":"Destinataire introuvable."})
                             elif num_co in dest_user.get("bloque",[]):
                                 envoyer_srv(conn, {"ok":False,"msg":"Tu es bloque par cet utilisateur."})
+                            elif nouveau_contact and not est_premium_actif(exp_user) and fs_compter_contacts_distincts(num_co) >= 5:
+                                envoyer_srv(conn, {"ok":False,"msg":"Limite de 5 contacts atteinte en gratuit. Passe premium pour debloquer."})
                             else:
                                 cle    = "_".join(sorted([num_co, dest]))
                                 msg_id = f"{int(time.time())}_{random.randint(1000,9999)}"
@@ -676,7 +726,8 @@ def gerer_client(conn, addr):
                                     "type":"message","de":nom_exp,"numero":num_co,
                                     "texte":texte,"heure":heure(),"chiffre":chiffre,
                                     "reply_to":reply_to,"msg_id":msg_id,
-                                    "premium":est_premium_actif(exp_user)
+                                    "premium":est_premium_actif(exp_user),
+                                    "premium_type":exp_user.get("premium_type") if exp_user else None
                                 })
                                 envoyer_srv(conn, {"ok":True,"livre":livre,"msg_id":msg_id})
                                 if livre: livrer(num_co, {"type":"livre","dest":dest,"msg_id":msg_id})
@@ -736,11 +787,15 @@ def gerer_client(conn, addr):
 
                 # ─── STATUT ───────────────────────────────
                 elif act == "changer_statut":
-                    if num_co:
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
                         statut = p.get("statut","disponible")
                         if statut not in STATUTS: statut = "disponible"
                         uid, _ = fs_get_user_by_numero(num_co)
-                        if uid:
+                        if not uid:
+                            envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        else:
                             fs_update_user(uid, {"statut": statut})
                             with lock: cibles = list(clients.items())
                             _, eu = fs_get_user_by_numero(num_co)
@@ -752,10 +807,14 @@ def gerer_client(conn, addr):
 
                 # ─── FAVORIS ──────────────────────────────
                 elif act == "ajouter_favori":
-                    if num_co:
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
                         cible = p.get("numero","").strip()
                         uid, user = fs_get_user_by_numero(num_co)
-                        if uid:
+                        if not uid:
+                            envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        else:
                             favoris = user.get("favoris",[])
                             if cible not in favoris: favoris.append(cible)
                             fs_update_user(uid, {"favoris": favoris})
@@ -775,10 +834,14 @@ def gerer_client(conn, addr):
 
                 # ─── BLOQUER ──────────────────────────────
                 elif act == "bloquer":
-                    if num_co:
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
                         cible  = p.get("numero","").strip(); action = p.get("bloquer",True)
                         uid, user = fs_get_user_by_numero(num_co)
-                        if uid:
+                        if not uid:
+                            envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        else:
                             liste_bloques = user.get("bloque",[])
                             if action and cible not in liste_bloques: liste_bloques.append(cible)
                             elif not action and cible in liste_bloques: liste_bloques.remove(cible)
@@ -787,16 +850,26 @@ def gerer_client(conn, addr):
 
                 # ─── PROFIL ───────────────────────────────
                 elif act == "changer_couleur":
-                    if num_co:
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
                         couleur = p.get("couleur","cyan")
                         uid, _ = fs_get_user_by_numero(num_co)
-                        if uid: fs_update_user(uid, {"couleur":couleur}); envoyer_srv(conn, {"ok":True,"msg":"Couleur changee!","couleur":couleur})
+                        if not uid:
+                            envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        else:
+                            fs_update_user(uid, {"couleur":couleur}); envoyer_srv(conn, {"ok":True,"msg":"Couleur changee!","couleur":couleur})
 
                 elif act == "modifier_bio":
-                    if num_co:
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
                         bio = p.get("bio","").strip()[:150]
                         uid, _ = fs_get_user_by_numero(num_co)
-                        if uid: fs_update_user(uid, {"bio":bio}); envoyer_srv(conn, {"ok":True,"msg":"Bio mise a jour!"})
+                        if not uid:
+                            envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        else:
+                            fs_update_user(uid, {"bio":bio}); envoyer_srv(conn, {"ok":True,"msg":"Bio mise a jour!"})
 
 
                 # ─── FEEDBACK (message au developpeur) ────
@@ -804,20 +877,22 @@ def gerer_client(conn, addr):
                     if not num_co:
                         envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
                     else:
+                        _, user = fs_get_user_by_numero(num_co)
+                        prioritaire = user.get("premium_type") in ("annuel","fondateur") if user else False
                         with lock:
                             dernier = dernier_feedback.get(num_co, 0)
                             attente = FEEDBACK_COOLDOWN - (time.time() - dernier)
-                        if attente > 0:
+                        if attente > 0 and not prioritaire:
                             envoyer_srv(conn, {"ok":False,"msg":f"Merci d'attendre {int(attente)}s avant un nouveau feedback."})
                         else:
                             texte = p.get("texte","").strip()[:500]
                             if len(texte) < 3:
                                 envoyer_srv(conn, {"ok":False,"msg":"Message trop court."})
                             else:
-                                _, user = fs_get_user_by_numero(num_co)
-                                fs_save_feedback(num_co, user.get("nom","?") if user else "?", texte)
+                                fs_save_feedback(num_co, user.get("nom","?") if user else "?", texte, prioritaire)
                                 with lock: dernier_feedback[num_co] = time.time()
-                                envoyer_srv(conn, {"ok":True,"msg":"Merci! Ton message a bien ete transmis au developpeur."})
+                                msg_ok = "Merci! Message transmis en PRIORITE au developpeur." if prioritaire else "Merci! Ton message a bien ete transmis au developpeur."
+                                envoyer_srv(conn, {"ok":True,"msg":msg_ok})
 
                 elif act == "changer_mdp":
                     if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
@@ -874,7 +949,9 @@ def gerer_client(conn, addr):
                             envoyer_srv(conn, {"ok":False,"msg":"Taille invalide."}); continue
                         _, exp_user  = fs_get_user_by_numero(num_co)
                         _, dest_user = fs_get_user_by_numero(dest)
-                        if taille>50*1024*1024: envoyer_srv(conn, {"ok":False,"msg":"Max 50 MB."})
+                        if not est_premium_actif(exp_user):
+                            envoyer_srv(conn, {"ok":False,"msg":"Envoi de fichiers reserve au premium. Passe premium pour debloquer."})
+                        elif taille>50*1024*1024: envoyer_srv(conn, {"ok":False,"msg":"Max 50 MB."})
                         elif not dest_user: envoyer_srv(conn, {"ok":False,"msg":"Destinataire introuvable."})
                         else:
                             safe   = "".join(c for c in nom_fich if c.isalnum() or c in "._-") or "fichier"
@@ -1019,20 +1096,43 @@ def gerer_client(conn, addr):
                             "premium_expire":user.get("premium_expire") if user else None,
                             "premium_type":user.get("premium_type") if user else None})
 
+                elif act == "soumettre_paiement":
+                    if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        code_t  = p.get("code_transaction","").strip()
+                        montant = p.get("montant","").strip()
+                        if not code_t or not montant:
+                            envoyer_srv(conn, {"ok":False,"msg":"Code de transaction et montant requis."})
+                        else:
+                            _, user = fs_get_user_by_numero(num_co)
+                            nom = user.get("nom","?") if user else "?"
+                            pid = fs_save_paiement_attente(num_co, nom, code_t, montant)
+                            if pid:
+                                envoyer_srv(conn, {"ok":True,"msg":"Paiement soumis! L'admin va verifier et activer ton premium sous peu."})
+                            else:
+                                envoyer_srv(conn, {"ok":False,"msg":"Erreur, reessaie plus tard."})
+
                 elif act == "admin_activer_premium":
                     if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         cible = p.get("numero","").strip()
-                        type_abo = p.get("type","mensuel")  # "mensuel" ou "annuel"
-                        jours = 365 if type_abo == "annuel" else 30
+                        type_abo = p.get("type","mensuel")  # "mensuel", "annuel" ou "fondateur"
                         uid, user = fs_get_user_by_numero(cible)
                         if not uid: envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
                         else:
-                            expire = (datetime.datetime.now() + datetime.timedelta(days=jours)).isoformat()
-                            fs_update_user(uid, {"premium":True,"premium_expire":expire,
-                                "premium_type":type_abo,"active_par":num_co})
-                            livrer(cible, {"type":"premium_active","expire":expire,"msg":"Ton compte premium est actif!"})
-                            envoyer_srv(conn, {"ok":True,"msg":f"Premium ({type_abo}) active pour {cible} jusqu'au {expire[:10]}."})
+                            if type_abo == "fondateur":
+                                expire = None
+                                fs_update_user(uid, {"premium":True,"premium_expire":expire,
+                                    "premium_type":type_abo,"active_par":num_co})
+                                livrer(cible, {"type":"premium_active","expire":"jamais","msg":"Ton compte Fondateur est actif a vie!"})
+                                envoyer_srv(conn, {"ok":True,"msg":f"Premium Fondateur (a vie) active pour {cible}."})
+                            else:
+                                jours = 365 if type_abo == "annuel" else 30
+                                expire = (datetime.datetime.now() + datetime.timedelta(days=jours)).isoformat()
+                                fs_update_user(uid, {"premium":True,"premium_expire":expire,
+                                    "premium_type":type_abo,"active_par":num_co})
+                                livrer(cible, {"type":"premium_active","expire":expire,"msg":"Ton compte premium est actif!"})
+                                envoyer_srv(conn, {"ok":True,"msg":f"Premium ({type_abo}) active pour {cible} jusqu'au {expire[:10]}."})
 
                 elif act == "admin_desactiver_premium":
                     if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
@@ -1107,6 +1207,54 @@ def gerer_client(conn, addr):
                             except Exception: pass
                             envoyer_srv(conn, {"ok":True,"msg":"Utilisateur deconnecte."})
                         else: envoyer_srv(conn, {"ok":False,"msg":"Utilisateur hors ligne."})
+
+                elif act == "admin_message":
+                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else:
+                        cible = p.get("numero","").strip()
+                        texte = p.get("texte","").strip()
+                        if not texte:
+                            envoyer_srv(conn, {"ok":False,"msg":"Message vide."})
+                        else:
+                            livre = livrer(cible, {"type":"message_admin","msg":texte,"heure":heure()})
+                            if livre:
+                                envoyer_srv(conn, {"ok":True,"msg":"Message envoye."})
+                            else:
+                                envoyer_srv(conn, {"ok":False,"msg":"Utilisateur hors ligne, message non envoye."})
+
+                elif act == "admin_paiements_attente":
+                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else:
+                        paiements = fs_get_paiements_attente()
+                        envoyer_srv(conn, {"ok":True,"paiements":paiements})
+
+                elif act == "admin_confirmer_paiement":
+                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else:
+                        pid    = p.get("id","").strip()
+                        cible  = p.get("numero","").strip()
+                        type_abo = p.get("type","mensuel")
+                        uid, user = fs_get_user_by_numero(cible)
+                        if not uid:
+                            envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        else:
+                            if type_abo == "fondateur":
+                                expire = None
+                            else:
+                                jours = 365 if type_abo == "annuel" else 30
+                                expire = (datetime.datetime.now() + datetime.timedelta(days=jours)).isoformat()
+                            fs_update_user(uid, {"premium":True,"premium_expire":expire,
+                                "premium_type":type_abo,"active_par":num_co})
+                            fs_update_paiement(pid, "confirme")
+                            livrer(cible, {"type":"premium_active","expire":expire or "jamais","msg":"Paiement confirme, ton premium est actif!"})
+                            envoyer_srv(conn, {"ok":True,"msg":f"Paiement confirme, premium ({type_abo}) active pour {cible}."})
+
+                elif act == "admin_rejeter_paiement":
+                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else:
+                        pid = p.get("id","").strip()
+                        fs_update_paiement(pid, "rejete")
+                        envoyer_srv(conn, {"ok":True,"msg":"Paiement rejete."})
 
                 else: envoyer_srv(conn, {"ok":False,"msg":f"Action inconnue: {act}"})
 
