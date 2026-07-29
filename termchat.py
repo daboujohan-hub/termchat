@@ -382,6 +382,24 @@ def afficher_entrant(p):
     elif t == "kick":
         print(f"\n{R}{B}⛔ {p.get('msg','Deconnecte par admin.')}{Z}")
         en_cours = False
+    elif t == "premium_active":
+        session["premium"] = True
+        session["premium_type"] = p.get("premium_type")
+        exp_p = p.get("expire","")
+        beep(); beep()
+        print(f"\n{V}{B}🎉 {p.get('msg','Ton premium est actif!')}{Z}")
+        if exp_p and exp_p != "jamais":
+            print(f"{V}   Expire le: {exp_p[:10]}{Z}")
+        print(f"{G}> {Z}", end="", flush=True)
+    elif t == "premium_active":
+        session["premium"] = True
+        session["premium_type"] = p.get("premium_type")
+        exp_p = p.get("expire","")
+        beep(); beep()
+        print(f"\n{V}{B}🎉 {p.get('msg','Ton premium est actif!')}{Z}")
+        if exp_p and exp_p != "jamais":
+            print(f"{V}   Expire le: {exp_p[:10]}{Z}")
+        print(f"{G}> {Z}", end="", flush=True)
 
 # --- Menus et fonctions (conservées, avec protections .get where needed) ---
 

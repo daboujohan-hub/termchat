@@ -8,7 +8,7 @@ Base de donnees : Firebase Firestore (donnees permanentes)
 """
 
 import socket, threading, json, os, random, hashlib, re
-import datetime, time, base64, signal, sys, ssl
+import datetime, time, base64, signal, sys, ssl, secrets
 import bcrypt
 
 # Firebase Admin SDK
@@ -461,6 +461,8 @@ def temps_restant(cle):
 # ── Cooldown feedback (anti-spam simple, independant de l'anti-bruteforce) ──
 dernier_feedback = {}   # numero -> timestamp du dernier envoi
 FEEDBACK_COOLDOWN = 60  # secondes entre deux feedbacks du meme compte
+dernier_paiement = {}   # numero -> timestamp de la derniere soumission
+PAIEMENT_COOLDOWN = 120  # secondes entre deux soumissions de paiement
 
 envoi_lock = threading.Lock()
 
@@ -647,14 +649,21 @@ def gerer_client(conn, addr):
                 elif act == "chercher":
                     if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
                     else:
+                        cle_bf_ch = f"chercher_{num_co}"
+                        if bloque(cle_bf_ch):
+                            envoyer_srv(conn, {"ok":False,"msg":f"Trop de recherches. Reessaie dans {temps_restant(cle_bf_ch)}s."})
+                            continue
                         pseudo = p.get("pseudo","").strip()
                         numero = p.get("numero","").strip()
                         if pseudo:
                             _, trouve = fs_get_user_by_pseudo(pseudo)
                         else:
                             _, trouve = fs_get_user_by_numero(numero)
-                        if not trouve: envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        if not trouve:
+                            signaler_echec(cle_bf_ch)
+                            envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
                         else:
+                            signaler_succes(cle_bf_ch)
                             en_ligne = trouve["numero"] in clients
                             envoyer_srv(conn, {"ok":True,"user":{
                                 "nom":trouve.get("nom","?"),"numero":trouve["numero"],
@@ -1099,11 +1108,18 @@ def gerer_client(conn, addr):
                 elif act == "soumettre_paiement":
                     if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
                     else:
+                        with lock:
+                            dernier_p = dernier_paiement.get(num_co, 0)
+                            attente_p = PAIEMENT_COOLDOWN - (time.time() - dernier_p)
+                        if attente_p > 0:
+                            envoyer_srv(conn, {"ok":False,"msg":f"Merci d'attendre {int(attente_p)}s avant une nouvelle soumission."})
+                            continue
                         code_t  = p.get("code_transaction","").strip()
                         montant = p.get("montant","").strip()
                         if not code_t or not montant:
                             envoyer_srv(conn, {"ok":False,"msg":"Code de transaction et montant requis."})
                         else:
+                            with lock: dernier_paiement[num_co] = time.time()
                             _, user = fs_get_user_by_numero(num_co)
                             nom = user.get("nom","?") if user else "?"
                             pid = fs_save_paiement_attente(num_co, nom, code_t, montant)
@@ -1124,14 +1140,14 @@ def gerer_client(conn, addr):
                                 expire = None
                                 fs_update_user(uid, {"premium":True,"premium_expire":expire,
                                     "premium_type":type_abo,"active_par":num_co})
-                                livrer(cible, {"type":"premium_active","expire":"jamais","msg":"Ton compte Fondateur est actif a vie!"})
+                                livrer(cible, {"type":"premium_active","expire":"jamais","premium_type":"fondateur","msg":"Ton compte Fondateur est actif a vie!"})
                                 envoyer_srv(conn, {"ok":True,"msg":f"Premium Fondateur (a vie) active pour {cible}."})
                             else:
                                 jours = 365 if type_abo == "annuel" else 30
                                 expire = (datetime.datetime.now() + datetime.timedelta(days=jours)).isoformat()
                                 fs_update_user(uid, {"premium":True,"premium_expire":expire,
                                     "premium_type":type_abo,"active_par":num_co})
-                                livrer(cible, {"type":"premium_active","expire":expire,"msg":"Ton compte premium est actif!"})
+                                livrer(cible, {"type":"premium_active","expire":expire,"premium_type":type_abo,"msg":"Ton compte premium est actif!"})
                                 envoyer_srv(conn, {"ok":True,"msg":f"Premium ({type_abo}) active pour {cible} jusqu'au {expire[:10]}."})
 
                 elif act == "admin_desactiver_premium":
@@ -1150,7 +1166,7 @@ def gerer_client(conn, addr):
                     if bloque(cle_bf):
                         envoyer_srv(conn, {"ok":False,"msg":f"Trop de tentatives. Reessaie dans {temps_restant(cle_bf)}s."})
                         continue
-                    if p.get("code","") == ADMIN_CODE:
+                    if secrets.compare_digest(p.get("code",""), ADMIN_CODE):
                         signaler_succes(cle_bf)
                         est_admin = True
                         if num_co:
@@ -1246,7 +1262,7 @@ def gerer_client(conn, addr):
                             fs_update_user(uid, {"premium":True,"premium_expire":expire,
                                 "premium_type":type_abo,"active_par":num_co})
                             fs_update_paiement(pid, "confirme")
-                            livrer(cible, {"type":"premium_active","expire":expire or "jamais","msg":"Paiement confirme, ton premium est actif!"})
+                            livrer(cible, {"type":"premium_active","expire":expire or "jamais","premium_type":type_abo,"msg":"Paiement confirme, ton premium est actif!"})
                             envoyer_srv(conn, {"ok":True,"msg":f"Paiement confirme, premium ({type_abo}) active pour {cible}."})
 
                 elif act == "admin_rejeter_paiement":
