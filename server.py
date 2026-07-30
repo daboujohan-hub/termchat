@@ -79,8 +79,8 @@ def preparer_certificat_tls():
     os.makedirs(CERT_DIR, exist_ok=True)
     if os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
         return True
-    if REQUIRE_EXISTING_TLS_CERT or PRODUCTION_MODE or not ALLOW_SELF_SIGNED_DEV_CERT:
-        return False
+    if REQUIRE_EXISTING_TLS_CERT:
+    return False
     try:
         from cryptography import x509
         from cryptography.x509.oid import NameOID
