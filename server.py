@@ -599,7 +599,7 @@ def gerer_client(conn, addr):
                     elif prefixe not in prefixes_valides:
                         signaler_echec(cle_bf_insc)
                         envoyer_srv(conn, {"ok":False,"msg":"Pays/prefixe invalide."})
-                    elif not verifier_pays_ip(addr[0], prefixe)[0]:
+                    elif (lambda r: (print(f"[DEBUG IP] addr={addr[0]} prefixe_declare={prefixe} pays_detecte={r[1]} match={r[0]}"), not r[0])[1])(verifier_pays_ip(addr[0], prefixe)):
                         _, pays_reel = verifier_pays_ip(addr[0], prefixe)
                         signaler_echec(cle_bf_insc)
                         envoyer_srv(conn, {"ok":False,"msg":f"Le pays declare ne correspond pas a ta localisation detectee ({pays_reel or '?'})."})
