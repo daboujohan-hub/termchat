@@ -1044,7 +1044,9 @@ def gerer_client(conn, addr):
                             envoyer_srv(conn, {"ok":True,"id_groupe":gid,"nom":nom_g})
 
                 elif act == "ajouter_groupe":
-                    if num_co:
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
                         gid=p.get("id_groupe","").strip(); cible=p.get("numero","").strip()
                         groupe = fs_get_groupe(gid)
                         _, cible_user = fs_get_user_by_numero(cible)
@@ -1064,11 +1066,15 @@ def gerer_client(conn, addr):
                             envoyer_srv(conn, {"ok":True,"msg":"Membre ajoute!"})
 
                 elif act == "msg_groupe":
-                    if num_co:
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
                         gid=p.get("id_groupe","").strip(); texte=p.get("texte","").strip(); reply=p.get("reply_to")
                         groupe = fs_get_groupe(gid)
-                        if groupe and num_co in groupe.get("membres",[]) and texte:
-                            _, eu = fs_get_user_by_numero(num_co)
+                        _, eu = fs_get_user_by_numero(num_co)
+                        if groupe and num_co in groupe.get("membres",[]) and texte and not est_premium_actif(eu) and len(texte) > 150:
+                            envoyer_srv(conn, {"ok":False,"msg":"Message trop long (max 150 caracteres en gratuit). Passe premium pour debloquer."})
+                        elif groupe and num_co in groupe.get("membres",[]) and texte:
                             msg  = {"de":num_co,"nom":eu.get("nom","?") if eu else "?","texte":texte,"heure":horodatage(),"reply_to":reply}
                             fs_save_msg_groupe(gid, msg)
                             for m in groupe.get("membres",[]):
@@ -1078,14 +1084,18 @@ def gerer_client(conn, addr):
                         else: envoyer_srv(conn, {"ok":False,"msg":"Groupe introuvable ou non membre."})
 
                 elif act == "mes_groupes":
-                    if num_co:
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
                         groupes = fs_mes_groupes(num_co)
                         result  = [{"id":gid,"nom":g.get("nom","?"),"membres":len(g.get("membres",[])),"createur":g.get("createur")==num_co}
                                    for gid,g in groupes]
                         envoyer_srv(conn, {"ok":True,"groupes":result})
 
                 elif act == "epingler_groupe":
-                    if num_co:
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
                         gid=p.get("id_groupe","").strip(); texte=p.get("texte","").strip()
                         groupe = fs_get_groupe(gid)
                         if not groupe: envoyer_srv(conn, {"ok":False,"msg":"Groupe introuvable."})
