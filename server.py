@@ -1,21 +1,27 @@
-from google.cloud.firestore_v1.base_query import FieldFilter
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TermChat v6.0 — Serveur
+TermChat v6.1 — Serveur (version sécurisée)
 by Aboudev Labs CI
-Base de donnees : Firebase Firestore (donnees permanentes)
+Base de données : Firebase Firestore (données permanentes)
+
+Correctifs sécurité v6.1 :
+- Protection contre la substitution silencieuse de clé publique E2E
+- Admin login durci (comparaison constante déjà présente + commentaires)
+- Fichiers optionnellement chiffrés au repos (FILE_ENCRYPTION_KEY)
+- Nettoyage code (doublons de commentaires)
 """
 
-import socket, threading, json, os, random, hashlib, re
+import socket, threading, json, os, hashlib, re, uuid, binascii, ipaddress
 import datetime, time, base64, signal, sys, ssl, secrets
+from pathlib import Path
 import bcrypt
 
 # Firebase Admin SDK
 try:
     import firebase_admin
     from firebase_admin import credentials, firestore
-    # from google.cloud.firestore_v1.base_query import FieldFilter  # plus besoin
+    from google.cloud.firestore_v1.base_query import FieldFilter
     FIREBASE_OK = True
 except ImportError:
     FIREBASE_OK = False
@@ -25,27 +31,56 @@ except ImportError:
 #  CONFIG
 # ══════════════════════════════════════════════════════════
 PORT       = int(os.environ.get("PORT", 9999))
+BIND_HOST  = os.environ.get("BIND_HOST", "0.0.0.0")
 ADMIN_CODE = os.environ.get("ADMIN_CODE", "")
+PRODUCTION_MODE = os.environ.get("PRODUCTION_MODE", "1") != "0"
+REQUIRE_TLS = os.environ.get("REQUIRE_TLS", "1") != "0"
+REQUIRE_FIREBASE = os.environ.get("REQUIRE_FIREBASE", "1") != "0"
+REQUIRE_EXISTING_TLS_CERT = os.environ.get("REQUIRE_EXISTING_TLS_CERT", "1") != "0"
+ALLOW_SELF_SIGNED_DEV_CERT = os.environ.get("ALLOW_SELF_SIGNED_DEV_CERT", "0") == "1"
+ALLOW_INSECURE_GEOIP_CHECK = os.environ.get("ALLOW_INSECURE_GEOIP_CHECK", "0") == "1"
+ALLOW_LEGACY_SHA256_LOGIN = os.environ.get("ALLOW_LEGACY_SHA256_LOGIN", "0") == "1"
+ALLOW_INLINE_MEDIA = os.environ.get("ALLOW_INLINE_MEDIA", "0") == "1"
+ALLOW_ACCOUNT_DELETION = os.environ.get("ALLOW_ACCOUNT_DELETION", "0") == "1"
+MIN_PASSWORD_LEN = int(os.environ.get("MIN_PASSWORD_LEN", "12"))
+MAX_MESSAGE_LEN_FREE = int(os.environ.get("MAX_MESSAGE_LEN_FREE", "150"))
+MAX_MESSAGE_LEN_PREMIUM = int(os.environ.get("MAX_MESSAGE_LEN_PREMIUM", "4000"))
+MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(5 * 1024 * 1024)))
+MAX_BUFFER_BYTES = int(os.environ.get("MAX_BUFFER_BYTES", str(MAX_UPLOAD_BYTES * 2 + 1024 * 1024)))
+MAX_FEEDBACK_LEN = int(os.environ.get("MAX_FEEDBACK_LEN", "500"))
+MAX_BIO_LEN = int(os.environ.get("MAX_BIO_LEN", "150"))
+MAX_FILES_DIR_BYTES = int(os.environ.get("MAX_FILES_DIR_BYTES", str(256 * 1024 * 1024)))
+MAX_FILE_RETENTION_SECONDS = int(os.environ.get("MAX_FILE_RETENTION_SECONDS", str(24 * 3600)))
+GLOBAL_ACTIONS_PER_MIN = int(os.environ.get("GLOBAL_ACTIONS_PER_MIN", "180"))
+AUTH_ATTEMPTS_PER_5MIN_IP = int(os.environ.get("AUTH_ATTEMPTS_PER_5MIN_IP", "20"))
+AUTH_ATTEMPTS_PER_15MIN_ACCOUNT = int(os.environ.get("AUTH_ATTEMPTS_PER_15MIN_ACCOUNT", "10"))
+ADMIN_ALLOWED_IPS_RAW = os.environ.get("ADMIN_ALLOWED_IPS", "")
+# Clé optionnelle pour chiffrer les fichiers au repos (Fernet url-safe base64, 32 bytes)
+# Générer avec : python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+FILE_ENCRYPTION_KEY = os.environ.get("FILE_ENCRYPTION_KEY", "").strip() or None
+
 if not ADMIN_CODE or len(ADMIN_CODE) < 12:
     print("❌ ERREUR : la variable d'environnement ADMIN_CODE doit être définie "
           "(minimum 12 caractères, aléatoire). Aucune valeur par défaut n'est autorisée.")
-    print("   Exemple : export ADMIN_CODE=$(python3 -c \"import secrets;print(secrets.token_urlsafe(24))\")")
+    print('   Exemple : export ADMIN_CODE=$(python3 -c "import secrets;print(secrets.token_urlsafe(24))")')
     sys.exit(1)
 RE_PSEUDO  = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{2,19}$")
 RE_EMAIL   = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 FIREBASE_CREDS = os.environ.get("FIREBASE_CREDS", "")  # JSON string
 CERT_DIR   = os.path.join(os.path.expanduser("~"), ".termchat_tls")
-CERT_FILE  = os.path.join(CERT_DIR, "cert.pem")
-KEY_FILE   = os.path.join(CERT_DIR, "key.pem")
+CERT_FILE  = os.environ.get("TLS_CERT_FILE", os.path.join(CERT_DIR, "cert.pem"))
+KEY_FILE   = os.environ.get("TLS_KEY_FILE", os.path.join(CERT_DIR, "key.pem"))
 
 def preparer_certificat_tls():
-    """Charge un certificat existant, ou en genere un auto-signe si absent.
-    Un certificat auto-signe chiffre bien le trafic (protection contre
-    l'ecoute passive), mais le client doit desactiver la verification de
-    la chaine de confiance (pas de CA reconnue) — voir termchat.py."""
+    """Prépare TLS.
+    En mode production, on exige un certificat existant fourni par l'opérateur.
+    L'auto-signé n'est autorisé qu'en mode développement local explicite.
+    """
     os.makedirs(CERT_DIR, exist_ok=True)
     if os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
-        return
+        return True
+    if REQUIRE_EXISTING_TLS_CERT or PRODUCTION_MODE or not ALLOW_SELF_SIGNED_DEV_CERT:
+        return False
     try:
         from cryptography import x509
         from cryptography.x509.oid import NameOID
@@ -53,22 +88,26 @@ def preparer_certificat_tls():
         from cryptography.hazmat.primitives.asymmetric import rsa
         import datetime as dt
         cle = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        nom = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "termchat.local")])
+        nom = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
         maintenant = dt.datetime.now(dt.timezone.utc)
         cert = (x509.CertificateBuilder()
                 .subject_name(nom).issuer_name(nom).public_key(cle.public_key())
                 .serial_number(x509.random_serial_number())
                 .not_valid_before(maintenant)
-                .not_valid_after(maintenant + dt.timedelta(days=3650))
+                .not_valid_after(maintenant + dt.timedelta(days=30))
                 .sign(cle, hashes.SHA256()))
         with open(KEY_FILE, "wb") as f:
             f.write(cle.private_bytes(serialization.Encoding.PEM,
                      serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
+        os.chmod(KEY_FILE, 0o600)
         with open(CERT_FILE, "wb") as f:
             f.write(cert.public_bytes(serialization.Encoding.PEM))
-        print("✅ Certificat TLS auto-signe genere.")
+        os.chmod(CERT_FILE, 0o600)
+        print("✅ Certificat TLS de développement auto-signé généré.")
+        return True
     except Exception as e:
-        print(f"⚠️  Impossible de generer le certificat TLS: {e}")
+        print(f"⚠️  Impossible de générer le certificat TLS: {e}")
+        return False
 
 PAYS = {
     "1": ("Cote d'Ivoire", "+225"),
@@ -91,20 +130,25 @@ ISO_VERS_PREFIXE = {
 }
 
 def verifier_pays_ip(ip, prefixe_declare):
-    """Retourne (ok, pays_detecte). ok=True si correspondance ou si verification impossible (fail-open)."""
+    """Retourne (ok, pays_detecte).
+    Désactivé par défaut car la version gratuite du service de géolocalisation
+    IP utilisée ici n'offre pas un transport de confiance.
+    """
+    if not ALLOW_INSECURE_GEOIP_CHECK:
+        return True, None
     try:
         import urllib.request, json as _json
         with urllib.request.urlopen(f"http://ip-api.com/json/{ip}?fields=countryCode,country", timeout=3) as resp:
             data = _json.loads(resp.read().decode())
         code_iso = data.get("countryCode", "")
         if not code_iso:
-            return True, None  # echec detection -> on laisse passer
+            return True, None
         prefixe_detecte = ISO_VERS_PREFIXE.get(code_iso)
         if prefixe_detecte is None:
-            return True, data.get("country")  # pays hors liste -> on laisse passer (pas bloquant)
+            return True, data.get("country")
         return (prefixe_detecte == prefixe_declare), data.get("country")
     except Exception:
-        return True, None  # timeout/erreur reseau -> on laisse passer (fail-open)
+        return True, None
 STATUTS = ["disponible", "occupe", "ne_pas_deranger", "absent"]
 
 # ══════════════════════════════════════════════════════════
@@ -130,9 +174,10 @@ def init_firebase():
         else:
             print("⚠️  Pas de credentials Firebase")
             return False
-        firebase_admin.initialize_app(cred)
+        if not firebase_admin._apps:
+            firebase_admin.initialize_app(cred)
         db = firestore.client()
-        print("✅ Firebase Firestore connecte!")
+        print("✅ Firebase Firestore connecté !")
         return True
     except Exception as e:
         print(f"⚠️  Firebase erreur: {e}")
@@ -140,17 +185,126 @@ def init_firebase():
 
 # ══════════════════════════════════════════════════════════
 #  UTILITAIRES
+
 # ══════════════════════════════════════════════════════════
-def hacher(s):    return bcrypt.hashpw(s.encode(), bcrypt.gensalt()).decode()
+#  UTILITAIRES
+# ══════════════════════════════════════════════════════════
+def hacher(s):
+    return bcrypt.hashpw(s.encode(), bcrypt.gensalt()).decode()
+
+def gen_id(prefix):
+    return f"{prefix}{uuid.uuid4().hex}"
+
+def nettoyer_nom_fichier(nom_fichier):
+    brut = (nom_fichier or "fichier").strip()
+    safe = "".join(c for c in brut if c.isalnum() or c in "._-") or "fichier"
+    return safe[:120]
+
+def decoder_base64_strict(c64, taille_annoncee=0, max_bytes=MAX_UPLOAD_BYTES):
+    if not isinstance(c64, str) or not c64:
+        raise ValueError("Contenu manquant.")
+    try:
+        data = base64.b64decode(c64, validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("Base64 invalide.")
+    taille_reelle = len(data)
+    if taille_reelle <= 0:
+        raise ValueError("Contenu vide.")
+    if taille_reelle > max_bytes:
+        raise ValueError(f"Fichier trop volumineux (max {max_bytes // (1024*1024)} MB).")
+    if taille_annoncee:
+        try:
+            annoncee = int(taille_annoncee)
+        except Exception:
+            raise ValueError("Taille invalide.")
+        if annoncee != taille_reelle:
+            raise ValueError("La taille annoncée ne correspond pas au contenu reçu.")
+    return data, taille_reelle
+
+def _fernet_fichiers():
+    """Retourne un Fernet si FILE_ENCRYPTION_KEY est définie, sinon None."""
+    if not FILE_ENCRYPTION_KEY:
+        return None
+    try:
+        from cryptography.fernet import Fernet
+        return Fernet(FILE_ENCRYPTION_KEY.encode() if isinstance(FILE_ENCRYPTION_KEY, str) else FILE_ENCRYPTION_KEY)
+    except Exception as e:
+        print(f"⚠️  FILE_ENCRYPTION_KEY invalide ({e}) — fichiers stockés en clair.")
+        return None
+
+def ecrire_fichier_protege(chemin, data: bytes):
+    """Écrit un fichier, chiffré au repos si une clé est configurée."""
+    fernet = _fernet_fichiers()
+    payload = fernet.encrypt(data) if fernet else data
+    with open(chemin, "wb") as f:
+        f.write(payload)
+    try:
+        os.chmod(chemin, 0o600)
+    except Exception:
+        pass
+
+def lire_fichier_protege(chemin) -> bytes:
+    """Lit un fichier, le déchiffre si nécessaire."""
+    with open(chemin, "rb") as f:
+        raw = f.read()
+    fernet = _fernet_fichiers()
+    if fernet:
+        try:
+            return fernet.decrypt(raw)
+        except Exception:
+            # Peut être un ancien fichier en clair
+            return raw
+    return raw
+
+def taille_stockage_local():
+    total = 0
+    for p in Path(FILES_DIR).glob("*"):
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+        except OSError:
+            continue
+    return total
+
+def nettoyer_fichiers_temporaires():
+    maintenant = time.time()
+    for p in Path(FILES_DIR).glob("*"):
+        try:
+            if p.is_file() and maintenant - p.stat().st_mtime > MAX_FILE_RETENTION_SECONDS:
+                p.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+def verifier_budget_stockage():
+    nettoyer_fichiers_temporaires()
+    if taille_stockage_local() > MAX_FILES_DIR_BYTES:
+        raise ValueError("Stockage temporaire saturé. Réessaie plus tard.")
 def verifier_mdp(mdp, hash_stocke):
-    """Verifie un mot de passe. Compatible avec les anciens hash sha256
-    (comptes crees avant la migration bcrypt) qu'on remigre au vol."""
-    if not hash_stocke: return False
-    if hash_stocke.startswith("$2b$") or hash_stocke.startswith("$2a$"):
-        try: return bcrypt.checkpw(mdp.encode(), hash_stocke.encode())
-        except Exception: return False
-    # ancien format sha256 (64 caracteres hexa)
+    """Vérifie un mot de passe.
+    Le format SHA-256 historique est désactivé par défaut en production.
+    """
+    if not hash_stocke:
+        return False
+    if hash_stocke.startswith(("$2b$", "$2a$")):
+        try:
+            return bcrypt.checkpw(mdp.encode(), hash_stocke.encode())
+        except Exception:
+            return False
+    if not ALLOW_LEGACY_SHA256_LOGIN:
+        return False
     return hash_stocke == hashlib.sha256(mdp.encode()).hexdigest()
+
+def mot_de_passe_est_fort(mdp):
+    if len(mdp) < MIN_PASSWORD_LEN:
+        return False
+    classes = [
+        any(c.islower() for c in mdp),
+        any(c.isupper() for c in mdp),
+        any(c.isdigit() for c in mdp),
+        any(not c.isalnum() for c in mdp),
+    ]
+    return sum(classes) >= 3
+
 def horodatage(): return datetime.datetime.now().isoformat()
 def heure():      return datetime.datetime.now().strftime("%H:%M")
 
@@ -173,7 +327,7 @@ def gen_numero(prefixe):
     else:
         nums = set()
     while True:
-        n = prefixe + str(random.randint(1000000000, 9999999999))
+        n = prefixe + str(secrets.randbelow(9000000000) + 1000000000)
         if n not in nums:
             return n
 
@@ -238,7 +392,7 @@ def fs_delete_user(uid):
 def fs_save_feedback(numero, nom, texte, prioritaire=False):
     if not db: return
     try:
-        fid = f"fb_{int(time.time())}_{random.randint(1000,9999)}"
+        fid = gen_id("fb_")
         db.collection("feedback").document(fid).set({
             "numero": numero, "nom": nom, "texte": texte,
             "heure": horodatage(), "lu": False, "prioritaire": prioritaire
@@ -248,7 +402,7 @@ def fs_save_feedback(numero, nom, texte, prioritaire=False):
 def fs_save_paiement_attente(numero, nom, code_transaction, montant):
     if not db: return None
     try:
-        pid = f"pay_{int(time.time())}_{random.randint(1000,9999)}"
+        pid = gen_id("pay_")
         db.collection("paiements_attente").document(pid).set({
             "numero": numero, "nom": nom, "code_transaction": code_transaction,
             "montant": montant, "heure": horodatage(), "statut": "attente"
@@ -448,6 +602,10 @@ def fs_get_stats():
 # ══════════════════════════════════════════════════════════
 FILES_DIR = os.path.join(os.path.expanduser("~"), ".termchat_files")
 os.makedirs(FILES_DIR, exist_ok=True)
+try:
+    os.chmod(FILES_DIR, 0o700)
+except Exception:
+    pass
 
 # ══════════════════════════════════════════════════════════
 #  CLIENTS CONNECTÉS
@@ -457,7 +615,7 @@ admins_connectes = set()
 lock             = threading.Lock()
 TIMEOUT          = 1800
 MAX_CONNEXIONS_SIMULTANEES = 500  # au-dela, nouvelles connexions refusees (protection DoS)
-MAX_TAILLE_BUFFER = 70 * 1024 * 1024  # 70 Mo (couvre fichiers 50 Mo + marge encodage base64/JSON)
+MAX_TAILLE_BUFFER = MAX_BUFFER_BYTES
 
 # ── Anti-bruteforce ──────────────────────────────────────────
 tentatives_echec = {}   # cle (ex: "login_ip") -> [nb_echecs, timestamp_dernier_echec]
@@ -493,14 +651,43 @@ dernier_feedback = {}   # numero -> timestamp du dernier envoi
 FEEDBACK_COOLDOWN = 60  # secondes entre deux feedbacks du meme compte
 dernier_paiement = {}   # numero -> timestamp de la derniere soumission
 PAIEMENT_COOLDOWN = 120  # secondes entre deux soumissions de paiement
+rate_limits = {}
+
+try:
+    ADMIN_ALLOWED_IPS = [ipaddress.ip_network(x.strip(), strict=False) for x in ADMIN_ALLOWED_IPS_RAW.split(",") if x.strip()]
+except Exception:
+    ADMIN_ALLOWED_IPS = []
+
+def limite_depassee(cle, limite, fenetre_sec):
+    maintenant = time.time()
+    with lock:
+        serie = [t for t in rate_limits.get(cle, []) if maintenant - t < fenetre_sec]
+        if len(serie) >= limite:
+            rate_limits[cle] = serie
+            return True
+        serie.append(maintenant)
+        rate_limits[cle] = serie
+        return False
+
+def ip_autorisee_pour_admin(ip):
+    if not ADMIN_ALLOWED_IPS:
+        return True
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+        return any(ip_obj in net for net in ADMIN_ALLOWED_IPS)
+    except ValueError:
+        return False
 
 envoi_lock = threading.Lock()
 
 def envoyer_srv(sock, paquet):
     try:
         data = (json.dumps(paquet, ensure_ascii=False) + "\n").encode()
-        with envoi_lock: sock.sendall(data)
-    except Exception: pass
+        with envoi_lock:
+            sock.sendall(data)
+    except Exception:
+        return False
+    return True
 
 def livrer(numero, paquet):
     with lock: s = clients.get(numero)
@@ -575,6 +762,13 @@ def gerer_client(conn, addr):
                 except Exception: continue
 
                 act = p.get("action", "")
+                ip_client = addr[0]
+                if not isinstance(p, dict) or not act:
+                    envoyer_srv(conn, {"ok":False,"msg":"Requête invalide."})
+                    continue
+                if limite_depassee(f"act_ip:{ip_client}", GLOBAL_ACTIONS_PER_MIN, 60):
+                    envoyer_srv(conn, {"ok":False,"msg":"Trop de requêtes. Réessaie plus tard."})
+                    continue
 
                 # ─── INSCRIPTION ──────────────────────────
                 if act == "inscrire":
@@ -587,43 +781,43 @@ def gerer_client(conn, addr):
                     prefixe = p.get("prefixe","+225").strip()
                     couleur = p.get("couleur","cyan")
                     pseudo  = p.get("pseudo","").strip().lstrip("@")
-                    email   = p.get("email","").strip()
+                    email   = p.get("email","").strip().lower()
+                    geo_ok, pays_reel = verifier_pays_ip(addr[0], prefixe)
                     prefixes_valides = [v[1] for v in PAYS.values()]
 
-                    if not nom or len(nom)<2 or len(nom)>20:
+                    if not nom or len(nom) < 2 or len(nom) > 20:
                         signaler_echec(cle_bf_insc)
-                        envoyer_srv(conn, {"ok":False,"msg":"Nom: 2 a 20 caracteres."})
-                    elif len(mdp)<4:
+                        envoyer_srv(conn, {"ok":False,"msg":"Nom: 2 à 20 caractères."})
+                    elif not mot_de_passe_est_fort(mdp):
                         signaler_echec(cle_bf_insc)
-                        envoyer_srv(conn, {"ok":False,"msg":"Mot de passe: minimum 4 caracteres."})
+                        envoyer_srv(conn, {"ok":False,"msg":f"Mot de passe insuffisamment robuste (min {MIN_PASSWORD_LEN} caractères, 3 classes parmi minuscule/majuscule/chiffre/symbole)."})
                     elif prefixe not in prefixes_valides:
                         signaler_echec(cle_bf_insc)
                         envoyer_srv(conn, {"ok":False,"msg":"Pays/prefixe invalide."})
-                    elif (lambda r: (print(f"[DEBUG IP] addr={addr[0]} prefixe_declare={prefixe} pays_detecte={r[1]} match={r[0]}"), not r[0])[1])(verifier_pays_ip(addr[0], prefixe)):
-                        _, pays_reel = verifier_pays_ip(addr[0], prefixe)
+                    elif not geo_ok:
                         signaler_echec(cle_bf_insc)
-                        envoyer_srv(conn, {"ok":False,"msg":f"Le pays declare ne correspond pas a ta localisation detectee ({pays_reel or '?'})."})
+                        envoyer_srv(conn, {"ok":False,"msg":f"Le pays déclaré ne correspond pas à la localisation détectée ({pays_reel or '?' })."})
                     elif not RE_PSEUDO.match(pseudo):
-                        envoyer_srv(conn, {"ok":False,"msg":"Pseudo invalide: 3-20 caracteres, doit commencer par une lettre, lettres/chiffres/underscore uniquement."})
+                        envoyer_srv(conn, {"ok":False,"msg":"Pseudo invalide: 3-20 caractères, doit commencer par une lettre, lettres/chiffres/underscore uniquement."})
                     elif email and not RE_EMAIL.match(email):
                         envoyer_srv(conn, {"ok":False,"msg":"Format d'email invalide."})
                     elif fs_get_user_by_pseudo(pseudo)[1] is not None:
-                        envoyer_srv(conn, {"ok":False,"msg":f"Le pseudo @{pseudo} est deja pris."})
+                        envoyer_srv(conn, {"ok":False,"msg":f"Le pseudo @{pseudo} est déjà pris."})
                     elif email and fs_get_user_by_email(email)[1] is not None:
-                        envoyer_srv(conn, {"ok":False,"msg":"Cet email est deja associe a un compte."})
+                        envoyer_srv(conn, {"ok":False,"msg":"Cet email est déjà associé à un compte."})
                     else:
                         numero = gen_numero(prefixe)
-                        pays   = next((v[0] for v in PAYS.values() if v[1]==prefixe), "Inconnu")
-                        uid    = f"u_{int(time.time())}_{random.randint(1000,9999)}"
+                        pays   = next((v[0] for v in PAYS.values() if v[1] == prefixe), "Inconnu")
+                        uid    = gen_id("u_")
                         user_data = {
                             "nom": nom, "nom_lower": nom.lower(), "numero": numero,
                             "pseudo": pseudo, "pseudo_lower": pseudo.lower(),
-                            "email": email, "email_lower": email.lower() if email else None,
+                            "email": email, "email_lower": email if email else None,
                             "mdp": hacher(mdp), "pays": pays, "prefixe": prefixe,
                             "bio": "", "couleur": couleur, "statut": "disponible",
                             "inscription": horodatage(), "derniere_connexion": None,
                             "favoris": [], "bloque": [], "est_admin": False, "pin": None,
-                            "cle_publique": p.get("cle_publique") or None,
+                            "cle_publique": (p.get("cle_publique") or "")[:8192] or None,
                             "premium": False, "premium_expire": None,
                             "premium_type": None, "active_par": None
                         }
@@ -633,38 +827,52 @@ def gerer_client(conn, addr):
 
                 # ─── CONNEXION (numéro) ───────────────────
                 elif act == "connecter_numero":
-                    ip = addr[0]; cle_bf = f"login_{ip}"
-                    if bloque(cle_bf):
-                        envoyer_srv(conn, {"ok":False,"msg":f"Trop de tentatives. Reessaie dans {temps_restant(cle_bf)}s."})
+                    ip = addr[0]
+                    cle_bf_ip = f"login_ip:{ip}"
+                    numero = p.get("numero","").strip()
+                    mdp = p.get("mdp","").strip()
+                    cle_bf_acct = f"login_numero:{numero}"
+                    if limite_depassee(cle_bf_ip, AUTH_ATTEMPTS_PER_5MIN_IP, 300) or (numero and limite_depassee(cle_bf_acct, AUTH_ATTEMPTS_PER_15MIN_ACCOUNT, 900)):
+                        envoyer_srv(conn, {"ok":False,"msg":"Trop de tentatives. Réessaie plus tard."})
                         continue
-                    numero = p.get("numero","").strip(); mdp = p.get("mdp","").strip()
                     uid, user = fs_get_user_by_numero(numero)
                     if not user or not verifier_mdp(mdp, user.get("mdp")):
-                        signaler_echec(cle_bf)
-                        envoyer_srv(conn, {"ok":False,"msg":"Numero ou mot de passe incorrect."})
+                        signaler_echec(cle_bf_ip)
+                        if numero:
+                            signaler_echec(cle_bf_acct)
+                        envoyer_srv(conn, {"ok":False,"msg":"Identifiants invalides."})
                     else:
-                        signaler_succes(cle_bf)
-                        if not user.get("mdp","").startswith(("$2b$","$2a$")):
-                            fs_update_user(uid, {"mdp": hacher(mdp)})  # remigration bcrypt au vol
+                        signaler_succes(cle_bf_ip)
+                        signaler_succes(cle_bf_acct)
+                        if ALLOW_LEGACY_SHA256_LOGIN and not user.get("mdp","").startswith(("$2b$","$2a$")):
+                            fs_update_user(uid, {"mdp": hacher(mdp)})
                         num_co, est_admin = _connecter_user(conn, user, uid)
 
                 # ─── CONNEXION (email) ─────────────────────
+                # ─── CONNEXION (email) ─────────────────────
                 elif act == "connecter_email":
-                    ip = addr[0]; cle_bf = f"login_{ip}"
-                    if bloque(cle_bf):
-                        envoyer_srv(conn, {"ok":False,"msg":f"Trop de tentatives. Reessaie dans {temps_restant(cle_bf)}s."})
+                    ip = addr[0]
+                    cle_bf_ip = f"login_ip:{ip}"
+                    email = p.get("email","").strip().lower()
+                    mdp = p.get("mdp","").strip()
+                    cle_bf_acct = f"login_email:{email}"
+                    if limite_depassee(cle_bf_ip, AUTH_ATTEMPTS_PER_5MIN_IP, 300) or (email and limite_depassee(cle_bf_acct, AUTH_ATTEMPTS_PER_15MIN_ACCOUNT, 900)):
+                        envoyer_srv(conn, {"ok":False,"msg":"Trop de tentatives. Réessaie plus tard."})
                         continue
-                    email = p.get("email","").strip(); mdp = p.get("mdp","").strip()
                     uid, user = fs_get_user_by_email(email)
                     if not user or not verifier_mdp(mdp, user.get("mdp")):
-                        signaler_echec(cle_bf)
-                        envoyer_srv(conn, {"ok":False,"msg":"Email ou mot de passe incorrect."})
+                        signaler_echec(cle_bf_ip)
+                        if email:
+                            signaler_echec(cle_bf_acct)
+                        envoyer_srv(conn, {"ok":False,"msg":"Identifiants invalides."})
                     else:
-                        signaler_succes(cle_bf)
-                        if not user.get("mdp","").startswith(("$2b$","$2a$")):
-                            fs_update_user(uid, {"mdp": hacher(mdp)})  # remigration bcrypt au vol
+                        signaler_succes(cle_bf_ip)
+                        signaler_succes(cle_bf_acct)
+                        if ALLOW_LEGACY_SHA256_LOGIN and not user.get("mdp","").startswith(("$2b$","$2a$")):
+                            fs_update_user(uid, {"mdp": hacher(mdp)})
                         num_co, est_admin = _connecter_user(conn, user, uid)
 
+                # ─── DEFINIR PSEUDO (migration anciens comptes) ──
                 # ─── DEFINIR PSEUDO (migration anciens comptes) ──
                 elif act == "definir_pseudo":
                     if not num_co:
@@ -696,7 +904,8 @@ def gerer_client(conn, addr):
 
                 # ─── VERIFIER NUMERO / PSEUDO (usage interne uniquement) ──
                 elif act == "chercher":
-                    if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecté."})
                     else:
                         cle_bf_ch = f"chercher_{num_co}"
                         if bloque(cle_bf_ch):
@@ -713,24 +922,43 @@ def gerer_client(conn, addr):
                             envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
                         else:
                             signaler_succes(cle_bf_ch)
-                            en_ligne = trouve["numero"] in clients
+                            contacts = set(fs_mes_contacts(num_co))
+                            est_contact = trouve["numero"] in contacts
                             envoyer_srv(conn, {"ok":True,"user":{
                                 "nom":trouve.get("nom","?"),"numero":trouve["numero"],
                                 "pseudo":trouve.get("pseudo",""),
-                                "statut":trouve.get("statut","disponible"),
+                                "statut":trouve.get("statut","disponible") if est_contact else None,
                                 "cle_publique":trouve.get("cle_publique"),
-                                "en_ligne":en_ligne}})
+                                "en_ligne":(trouve["numero"] in clients) if est_contact else False}})
 
-                # ─── PUBLIER CLE PUBLIQUE (chiffrement E2E automatique) ──
+                # ─── PUBLIER CLE PUBLIQUE (chiffrement E2E) ──────────────
                 elif act == "publier_cle_publique":
                     if not num_co:
-                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                        envoyer_srv(conn, {"ok": False, "msg": "Non connecté."})
                     else:
-                        cle_pub = p.get("cle_publique","").strip()
-                        uid, _ = fs_get_user_by_numero(num_co)
-                        if uid and cle_pub:
-                            fs_update_user(uid, {"cle_publique": cle_pub})
-                        envoyer_srv(conn, {"ok":True})
+                        cle_pub = (p.get("cle_publique") or "").strip()
+                        if not cle_pub or len(cle_pub) > 8192:
+                            envoyer_srv(conn, {"ok": False, "msg": "Clé publique invalide."})
+                            continue
+                        uid, user = fs_get_user_by_numero(num_co)
+                        if not uid:
+                            envoyer_srv(conn, {"ok": False, "msg": "Compte introuvable."})
+                            continue
+                        ancienne = (user or {}).get("cle_publique")
+                        # Refuser le remplacement silencieux d'une clé déjà publiée
+                        # (protège contre la substitution de clé / MITM E2E)
+                        if ancienne and ancienne != cle_pub:
+                            print(f"⚠️  Refus de changement de clé publique pour {num_co}")
+                            envoyer_srv(conn, {
+                                "ok": False,
+                                "msg": "Une clé publique existe déjà. Rotation non autorisée pour le moment."
+                            })
+                            continue
+                        fs_update_user(uid, {
+                            "cle_publique": cle_pub,
+                            "cle_publique_maj": horodatage()
+                        })
+                        envoyer_srv(conn, {"ok": True, "msg": "Clé publique enregistrée."})
 
 
 # ─── CONVERSATIONS ─────────────────────────
@@ -751,10 +979,12 @@ def gerer_client(conn, addr):
 
                         if not texte or not dest:
                             envoyer_srv(conn, {"ok":False,"msg":"Message ou destinataire vide."})
+                        elif len(texte) > MAX_MESSAGE_LEN_PREMIUM:
+                            envoyer_srv(conn, {"ok":False,"msg":f"Message trop long (max {MAX_MESSAGE_LEN_PREMIUM} caractères)."})
                         else:
                             _, exp_user  = fs_get_user_by_numero(num_co)
                             _, dest_user = fs_get_user_by_numero(dest)
-                            if not est_premium_actif(exp_user) and len(texte) > 150:
+                            if not est_premium_actif(exp_user) and len(texte) > MAX_MESSAGE_LEN_FREE:
                                 envoyer_srv(conn, {"ok":False,"msg":"Message trop long (max 150 caracteres en gratuit). Passe premium pour debloquer."})
                                 continue
                             cle_verif = "_".join(sorted([num_co, dest]))
@@ -767,7 +997,7 @@ def gerer_client(conn, addr):
                                 envoyer_srv(conn, {"ok":False,"msg":"Limite de 5 contacts atteinte en gratuit. Passe premium pour debloquer."})
                             else:
                                 cle    = "_".join(sorted([num_co, dest]))
-                                msg_id = f"{int(time.time())}_{random.randint(1000,9999)}"
+                                msg_id = gen_id("msg_")
                                 msg = {
                                     "id":msg_id,"de":num_co,"vers":dest,"texte":texte,
                                     "type":"texte","heure":horodatage(),"lu":False,
@@ -846,21 +1076,23 @@ def gerer_client(conn, addr):
                 # ─── STATUT ───────────────────────────────
                 elif act == "changer_statut":
                     if not num_co:
-                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecté."})
                     else:
                         statut = p.get("statut","disponible")
-                        if statut not in STATUTS: statut = "disponible"
+                        if statut not in STATUTS:
+                            statut = "disponible"
                         uid, _ = fs_get_user_by_numero(num_co)
                         if not uid:
                             envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
                         else:
                             fs_update_user(uid, {"statut": statut})
-                            with lock: cibles = list(clients.items())
+                            contacts = set(fs_mes_contacts(num_co))
+                            with lock:
+                                cibles = [(n, s) for n, s in clients.items() if n != num_co and n in contacts]
                             _, eu = fs_get_user_by_numero(num_co)
                             for num, sock in cibles:
-                                if num != num_co:
-                                    envoyer_srv(sock, {"type":"statut_change","numero":num_co,
-                                                       "nom":eu.get("nom","?") if eu else "?","statut":statut})
+                                envoyer_srv(sock, {"type":"statut_change","numero":num_co,
+                                                   "nom":eu.get("nom","?") if eu else "?","statut":statut})
                             envoyer_srv(conn, {"ok":True,"msg":f"Statut: {statut}"})
 
                 # ─── FAVORIS ──────────────────────────────
@@ -922,7 +1154,7 @@ def gerer_client(conn, addr):
                     if not num_co:
                         envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
                     else:
-                        bio = p.get("bio","").strip()[:150]
+                        bio = p.get("bio","").strip()[:MAX_BIO_LEN]
                         uid, _ = fs_get_user_by_numero(num_co)
                         if not uid:
                             envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
@@ -943,7 +1175,7 @@ def gerer_client(conn, addr):
                         if attente > 0 and not prioritaire:
                             envoyer_srv(conn, {"ok":False,"msg":f"Merci d'attendre {int(attente)}s avant un nouveau feedback."})
                         else:
-                            texte = p.get("texte","").strip()[:500]
+                            texte = p.get("texte","").strip()[:MAX_FEEDBACK_LEN]
                             if len(texte) < 3:
                                 envoyer_srv(conn, {"ok":False,"msg":"Message trop court."})
                             else:
@@ -957,17 +1189,24 @@ def gerer_client(conn, addr):
                     else:
                         ancien = p.get("ancien","").strip(); nouveau = p.get("nouveau","").strip()
                         uid, user = fs_get_user_by_numero(num_co)
-                        if len(nouveau)<4: envoyer_srv(conn, {"ok":False,"msg":"Min 4 caracteres."})
+                        if not mot_de_passe_est_fort(nouveau): envoyer_srv(conn, {"ok":False,"msg":f"Mot de passe insuffisamment robuste (min {MIN_PASSWORD_LEN} caractères, 3 classes)."})
                         elif not uid or not verifier_mdp(ancien, user.get("mdp")): envoyer_srv(conn, {"ok":False,"msg":"Ancien mot de passe incorrect."})
                         else: fs_update_user(uid, {"mdp":hacher(nouveau)}); envoyer_srv(conn, {"ok":True,"msg":"Mot de passe change!"})
 
                 elif act == "supprimer_compte":
                     if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
                     else:
-                        mdp = p.get("mdp","").strip()
-                        uid, user = fs_get_user_by_numero(num_co)
-                        if not uid or not verifier_mdp(mdp, user.get("mdp")): envoyer_srv(conn, {"ok":False,"msg":"Mot de passe incorrect."})
-                        else: fs_delete_user(uid); envoyer_srv(conn, {"ok":True,"msg":"Compte supprime."}); num_co = None
+                        if not ALLOW_ACCOUNT_DELETION:
+                            envoyer_srv(conn, {"ok":False,"msg":"Suppression de compte désactivée sur cette instance de production."})
+                        else:
+                            mdp = p.get("mdp","").strip()
+                            uid, user = fs_get_user_by_numero(num_co)
+                            if not uid or not verifier_mdp(mdp, user.get("mdp")):
+                                envoyer_srv(conn, {"ok":False,"msg":"Mot de passe incorrect."})
+                            else:
+                                fs_update_user(uid, {"desactive": True, "desactive_le": horodatage(), "premium": False, "premium_expire": None, "pin": None})
+                                envoyer_srv(conn, {"ok":True,"msg":"Compte désactivé."})
+                                num_co = None
 
                 # ─── PIN ──────────────────────────────────
                 elif act == "definir_pin":
@@ -997,89 +1236,102 @@ def gerer_client(conn, addr):
 
                 # ─── FICHIER ──────────────────────────────
                 elif act == "envoyer_fichier":
-                    if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecté."})
                     else:
-                        dest=p.get("dest","").strip(); nom_fich=p.get("nom_fichier","fichier")
-                        c64=p.get("contenu",""); taille_raw=p.get("taille",0)
-                        try:
-                            taille = int(taille_raw or 0)
-                        except Exception:
-                            envoyer_srv(conn, {"ok":False,"msg":"Taille invalide."}); continue
-                        _, exp_user  = fs_get_user_by_numero(num_co)
+                        dest = p.get("dest","").strip()
+                        nom_fich = p.get("nom_fichier","fichier")
+                        c64 = p.get("contenu","")
+                        taille_raw = p.get("taille",0)
+                        _, exp_user = fs_get_user_by_numero(num_co)
                         _, dest_user = fs_get_user_by_numero(dest)
-                        if not est_premium_actif(exp_user):
-                            envoyer_srv(conn, {"ok":False,"msg":"Envoi de fichiers reserve au premium. Passe premium pour debloquer."})
-                        elif taille>50*1024*1024: envoyer_srv(conn, {"ok":False,"msg":"Max 50 MB."})
-                        elif not dest_user: envoyer_srv(conn, {"ok":False,"msg":"Destinataire introuvable."})
+                        if not ALLOW_INLINE_MEDIA:
+                            envoyer_srv(conn, {"ok":False,"msg":"Envoi inline de fichiers désactivé en production Internet."})
+                        elif not est_premium_actif(exp_user):
+                            envoyer_srv(conn, {"ok":False,"msg":"Envoi de fichiers réservé au premium."})
+                        elif not dest_user:
+                            envoyer_srv(conn, {"ok":False,"msg":"Destinataire introuvable."})
                         else:
-                            safe   = "".join(c for c in nom_fich if c.isalnum() or c in "._-") or "fichier"
-                            chemin = os.path.join(FILES_DIR, f"{int(time.time())}_{safe}")
                             try:
-                                with open(chemin,"wb") as f:
-                                    f.write(base64.b64decode(c64))
-                                cle    = "_".join(sorted([num_co, dest]))
-                                msg_id = f"{int(time.time())}_{random.randint(1000,9999)}"
-                                # On ne stocke pas le contenu base64 (trop volumineux pour Firestore),
-                                # seulement la reference au fichier, pour que l'historique fonctionne.
+                                verifier_budget_stockage()
+                                data, taille = decoder_base64_strict(c64, taille_raw, MAX_UPLOAD_BYTES)
+                                safe_nom = nettoyer_nom_fichier(nom_fich)
+                                chemin = os.path.join(FILES_DIR, f"{gen_id('file_')}_{safe_nom}")
+                                ecrire_fichier_protege(chemin, data)
+                                cle = "_".join(sorted([num_co, dest]))
+                                msg_id = gen_id("msg_")
                                 msg = {
-                                    "id":msg_id,"de":num_co,"vers":dest,
-                                    "texte":nom_fich,"nom_fichier":safe,
-                                    "type":"fichier","heure":horodatage(),"lu":False,
-                                    "chiffre":False,"taille":taille
+                                    "id": msg_id, "de": num_co, "vers": dest,
+                                    "texte": safe_nom, "nom_fichier": safe_nom,
+                                    "type": "fichier", "heure": horodatage(), "lu": False,
+                                    "chiffre": False, "taille": taille,
+                                    "stockage": "local_temporaire"
                                 }
                                 fs_save_message(cle, msg)
                                 nom_exp = exp_user.get("nom","?") if exp_user else "?"
                                 livre = livrer(dest, {"type":"fichier","de":nom_exp,
-                                    "numero":num_co,"nom_fichier":nom_fich,"contenu":c64,"taille":taille,"heure":heure(),"msg_id":msg_id})
-                                envoyer_srv(conn, {"ok":True,"livre":livre,"msg_id":msg_id,"msg":f"'{nom_fich}' envoye."})
-                            except Exception as e: envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
+                                    "numero":num_co,"nom_fichier":safe_nom,"contenu":c64,
+                                    "taille":taille,"heure":heure(),"msg_id":msg_id})
+                                envoyer_srv(conn, {"ok":True,"livre":livre,"msg_id":msg_id,"msg":f"'{safe_nom}' envoyé."})
+                            except Exception as e:
+                                envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
 
                 # ─── VOCAL ────────────────────────────────
                 elif act == "envoyer_vocal":
-                    if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecté."})
                     else:
-                        dest=p.get("dest","").strip(); c64=p.get("contenu","")
-                        taille_raw=p.get("taille",0); duree_raw=p.get("duree",0)
-                        try:
-                            taille = int(taille_raw or 0)
-                        except Exception:
-                            envoyer_srv(conn, {"ok":False,"msg":"Taille invalide."}); continue
+                        dest = p.get("dest","").strip()
+                        c64 = p.get("contenu","")
+                        taille_raw = p.get("taille",0)
+                        duree_raw = p.get("duree",0)
                         try:
                             duree = int(duree_raw or 0)
                         except Exception:
                             duree = 0
-                        _, exp_user  = fs_get_user_by_numero(num_co)
+                        _, exp_user = fs_get_user_by_numero(num_co)
                         _, dest_user = fs_get_user_by_numero(dest)
-                        if taille>50*1024*1024: envoyer_srv(conn, {"ok":False,"msg":"Max 50 MB."})
-                        elif not dest_user: envoyer_srv(conn, {"ok":False,"msg":"Destinataire introuvable."})
+                        if not ALLOW_INLINE_MEDIA:
+                            envoyer_srv(conn, {"ok":False,"msg":"Envoi inline de vocaux désactivé en production Internet."})
+                        elif not dest_user:
+                            envoyer_srv(conn, {"ok":False,"msg":"Destinataire introuvable."})
                         else:
-                            nom_fich=f"vocal_{int(time.time())}.ogg"; chemin=os.path.join(FILES_DIR,nom_fich)
                             try:
-                                with open(chemin,"wb") as f: f.write(base64.b64decode(c64))
-                                cle    = "_".join(sorted([num_co, dest]))
-                                msg_id = f"{int(time.time())}_{random.randint(1000,9999)}"
+                                verifier_budget_stockage()
+                                data, taille = decoder_base64_strict(c64, taille_raw, MAX_UPLOAD_BYTES)
+                                nom_fich = f"{gen_id('vocal_')}.ogg"
+                                chemin = os.path.join(FILES_DIR, nom_fich)
+                                ecrire_fichier_protege(chemin, data)
+                                cle = "_".join(sorted([num_co, dest]))
+                                msg_id = gen_id("msg_")
                                 msg = {
-                                    "id":msg_id,"de":num_co,"vers":dest,
-                                    "texte":nom_fich,"nom_fichier":nom_fich,
-                                    "type":"vocal","heure":horodatage(),"lu":False,
-                                    "chiffre":False,"taille":taille,"duree":duree
+                                    "id": msg_id, "de": num_co, "vers": dest,
+                                    "texte": nom_fich, "nom_fichier": nom_fich,
+                                    "type": "vocal", "heure": horodatage(), "lu": False,
+                                    "chiffre": False, "taille": taille, "duree": duree,
+                                    "stockage": "local_temporaire"
                                 }
                                 fs_save_message(cle, msg)
                                 nom_exp = exp_user.get("nom","?") if exp_user else "?"
-                                livre=livrer(dest, {"type":"vocal","de":nom_exp,
-                                    "numero":num_co,"nom_fichier":nom_fich,"contenu":c64,"duree":duree,"taille":taille,"heure":heure(),"msg_id":msg_id})
-                                envoyer_srv(conn, {"ok":True,"livre":livre,"msg_id":msg_id,"msg":"Vocal envoye!"})
-                            except Exception as e: envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
+                                livre = livrer(dest, {"type":"vocal","de":nom_exp,
+                                    "numero":num_co,"nom_fichier":nom_fich,"contenu":c64,
+                                    "duree":duree,"taille":taille,"heure":heure(),"msg_id":msg_id})
+                                envoyer_srv(conn, {"ok":True,"livre":livre,"msg_id":msg_id,"msg":"Vocal envoyé!"})
+                            except Exception as e:
+                                envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
 
                 # ─── EN LIGNE ─────────────────────────────
                 elif act == "en_ligne":
-                    with lock: liste = list(clients.keys())
-                    result = []
-                    for n in liste:
-                        if n == num_co: continue
-                        _, u = fs_get_user_by_numero(n)
-                        if u: result.append({"numero":n,"nom":u.get("nom","?"),"statut":u.get("statut","disponible")})
-                    envoyer_srv(conn, {"ok":True,"users":result})
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecté."})
+                    else:
+                        contacts = set(fs_mes_contacts(num_co))
+                        with lock:
+                            liste = [n for n in clients.keys() if n in contacts and n != num_co]
+                        result = []
+                        for n in liste:
+                            _, u = fs_get_user_by_numero(n)
+                            if u:
+                                result.append({"numero":n,"nom":u.get("nom","?"),"statut":u.get("statut","disponible")})
+                        envoyer_srv(conn, {"ok":True,"users":result})
 
                 # ─── GROUPES ──────────────────────────────
                 elif act == "creer_groupe":
@@ -1087,7 +1339,7 @@ def gerer_client(conn, addr):
                         nom_g = p.get("nom","").strip()
                         if nom_g:
                             _, eu = fs_get_user_by_numero(num_co)
-                            gid  = f"grp_{int(time.time())}_{random.randint(1000,9999)}"
+                            gid  = gen_id("grp_")
                             fs_save_groupe(gid, {"nom":nom_g,"createur":num_co,"membres":[num_co],
                                 "creation":horodatage(),"epingle":None,"derniere_activite":horodatage()})
                             envoyer_srv(conn, {"ok":True,"id_groupe":gid,"nom":nom_g})
@@ -1121,7 +1373,9 @@ def gerer_client(conn, addr):
                         gid=p.get("id_groupe","").strip(); texte=p.get("texte","").strip(); reply=p.get("reply_to")
                         groupe = fs_get_groupe(gid)
                         _, eu = fs_get_user_by_numero(num_co)
-                        if groupe and num_co in groupe.get("membres",[]) and texte and not est_premium_actif(eu) and len(texte) > 150:
+                        if groupe and num_co in groupe.get("membres",[]) and texte and len(texte) > MAX_MESSAGE_LEN_PREMIUM:
+                            envoyer_srv(conn, {"ok":False,"msg":f"Message trop long (max {MAX_MESSAGE_LEN_PREMIUM} caractères)."})
+                        elif groupe and num_co in groupe.get("membres",[]) and texte and not est_premium_actif(eu) and len(texte) > MAX_MESSAGE_LEN_FREE:
                             envoyer_srv(conn, {"ok":False,"msg":"Message trop long (max 150 caracteres en gratuit). Passe premium pour debloquer."})
                         elif groupe and num_co in groupe.get("membres",[]) and texte:
                             msg  = {"de":num_co,"nom":eu.get("nom","?") if eu else "?","texte":texte,"heure":horodatage(),"reply_to":reply}
@@ -1221,19 +1475,36 @@ def gerer_client(conn, addr):
 
                 # ─── ADMIN ────────────────────────────────
                 elif act == "admin_login":
-                    ip = addr[0]; cle_bf = f"admin_{ip}"
+                    ip = addr[0]
+                    cle_bf = f"admin_{ip}"
                     if bloque(cle_bf):
-                        envoyer_srv(conn, {"ok":False,"msg":f"Trop de tentatives. Reessaie dans {temps_restant(cle_bf)}s."})
+                        envoyer_srv(conn, {"ok": False, "msg": f"Trop de tentatives. Réessaie dans {temps_restant(cle_bf)}s."})
                         continue
-                    if secrets.compare_digest(p.get("code",""), ADMIN_CODE):
+                    if not ip_autorisee_pour_admin(ip):
+                        signaler_echec(cle_bf)
+                        envoyer_srv(conn, {"ok": False, "msg": "Origine IP non autorisée pour l’administration."})
+                        continue
+                    if not num_co:
+                        signaler_echec(cle_bf)
+                        envoyer_srv(conn, {"ok": False, "msg": "Authentifie-toi d’abord avec un compte."})
+                        continue
+                    # Le compte doit déjà porter le flag est_admin dans Firestore
+                    # (à définir manuellement, jamais via l’interface publique)
+                    _, user = fs_get_user_by_numero(num_co)
+                    if not user or not user.get("est_admin"):
+                        signaler_echec(cle_bf)
+                        envoyer_srv(conn, {"ok": False, "msg": "Ce compte n’est pas autorisé à devenir administrateur."})
+                        continue
+                    # Comparaison en temps constant
+                    if secrets.compare_digest(p.get("code", "") or "", ADMIN_CODE):
                         signaler_succes(cle_bf)
                         est_admin = True
-                        if num_co:
-                            with lock: admins_connectes.add(num_co)
-                        envoyer_srv(conn, {"ok":True,"msg":"Acces admin accorde."})
+                        with lock:
+                            admins_connectes.add(num_co)
+                        envoyer_srv(conn, {"ok": True, "msg": "Accès admin accordé."})
                     else:
                         signaler_echec(cle_bf)
-                        envoyer_srv(conn, {"ok":False,"msg":"Code incorrect."})
+                        envoyer_srv(conn, {"ok": False, "msg": "Code incorrect."})
 
                 elif act == "admin_stats":
                     if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
@@ -1334,9 +1605,7 @@ def gerer_client(conn, addr):
                 else: envoyer_srv(conn, {"ok":False,"msg":f"Action inconnue: {act}"})
 
     except Exception as e:
-        import traceback
         print(f"⚠️  Erreur gerer_client: {e}")
-        traceback.print_exc()
     finally:
         if num_co:
             with lock: clients.pop(num_co,None); admins_connectes.discard(num_co)
@@ -1367,26 +1636,42 @@ def gerer_client_tls(conn, addr, ctx):
 
 def main():
     print("╔══════════════════════════════════════════╗")
-    print("║  💬  TERMCHAT v6.0 — SERVEUR             ║")
+    print("║  💬  TERMCHAT v6.1 — SERVEUR (sécurisé)  ║")
     print("║  by Aboudev Labs 🇨🇮                     ║")
     print("╚══════════════════════════════════════════╝")
-    init_firebase()
+    print(f"🔒 Bind: {BIND_HOST}:{PORT} | TLS requis: {REQUIRE_TLS} | Production: {PRODUCTION_MODE}")
+    if REQUIRE_FIREBASE and not init_firebase():
+        print("❌ Démarrage refusé: Firebase requis mais indisponible.")
+        sys.exit(1)
+    elif not REQUIRE_FIREBASE:
+        init_firebase()
     preparer_certificat_tls()
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(("0.0.0.0", PORT)); srv.listen(200)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    srv.bind((BIND_HOST, PORT)); srv.listen(512)
 
     ctx = None
     if os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
         try:
             ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_3 if hasattr(ssl.TLSVersion, "TLSv1_3") else ssl.TLSVersion.TLSv1_2
+            ctx.options |= getattr(ssl, "OP_NO_COMPRESSION", 0)
+            try:
+                ctx.set_ciphers("ECDHE+AESGCM:ECDHE+CHACHA20")
+            except ssl.SSLError:
+                pass
             ctx.load_cert_chain(CERT_FILE, KEY_FILE)
             print(f"✅ TCP+TLS port {PORT}")
         except Exception as e:
             ctx = None
-            print(f"⚠️  TLS desactive ({e}) — trafic EN CLAIR!")
+            print(f"⚠️  TLS indisponible ({e})")
     else:
-        print(f"⚠️  Pas de certificat TLS — trafic EN CLAIR! (port {PORT})")
+        print(f"⚠️  Pas de certificat TLS valide pour le port {PORT}")
+
+    if REQUIRE_TLS and ctx is None:
+        print("❌ Démarrage refusé: TLS requis mais indisponible.")
+        sys.exit(1)
 
     def quitter(sig, frame): srv.close(); sys.exit(0)
     signal.signal(signal.SIGINT, quitter); signal.signal(signal.SIGTERM, quitter)
@@ -1402,7 +1687,10 @@ def main():
             if ctx:
                 threading.Thread(target=gerer_client_tls, args=(conn, addr, ctx), daemon=True).start()
             else:
-                threading.Thread(target=gerer_client, args=(conn, addr), daemon=True).start()
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         except Exception as e:
             print(f"⚠️  Erreur boucle accept (ignoree, on continue): {e}")
             continue
