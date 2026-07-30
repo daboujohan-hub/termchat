@@ -456,6 +456,8 @@ clients          = {}   # numero -> socket
 admins_connectes = set()
 lock             = threading.Lock()
 TIMEOUT          = 1800
+MAX_CONNEXIONS_SIMULTANEES = 500  # au-dela, nouvelles connexions refusees (protection DoS)
+MAX_TAILLE_BUFFER = 70 * 1024 * 1024  # 70 Mo (couvre fichiers 50 Mo + marge encodage base64/JSON)
 
 # ── Anti-bruteforce ──────────────────────────────────────────
 tentatives_echec = {}   # cle (ex: "login_ip") -> [nb_echecs, timestamp_dernier_echec]
@@ -560,6 +562,10 @@ def gerer_client(conn, addr):
                 break
             if not chunk: break
             buf += chunk
+            if len(buf) > MAX_TAILLE_BUFFER:
+                try: envoyer_srv(conn, {"ok":False,"msg":"Message trop volumineux."})
+                except Exception: pass
+                break
 
             while "\n" in buf:
                 ligne, buf = buf.split("\n", 1)
@@ -1387,6 +1393,12 @@ def main():
     while True:
         try:
             conn, addr = srv.accept()
+            with lock:
+                nb_actifs = threading.active_count()
+            if nb_actifs > MAX_CONNEXIONS_SIMULTANEES:
+                try: conn.close()
+                except Exception: pass
+                continue
             if ctx:
                 threading.Thread(target=gerer_client_tls, args=(conn, addr, ctx), daemon=True).start()
             else:
