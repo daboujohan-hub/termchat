@@ -76,7 +76,35 @@ PAYS = {
     "3": ("Guinee",        "+224"),
     "4": ("Burkina Faso",  "+226"),
     "5": ("Ghana",         "+233"),
+    "6": ("Mali",          "+223"),
+    "7": ("Togo",          "+228"),
+    "8": ("Benin",         "+229"),
+    "9": ("Niger",         "+227"),
+    "10": ("Nigeria",      "+234"),
+    "11": ("Cameroun",     "+237"),
 }
+
+# Correspondance code pays ISO (retourne par la geolocalisation IP) -> prefixe telephonique
+ISO_VERS_PREFIXE = {
+    "CI": "+225", "SN": "+221", "GN": "+224", "BF": "+226", "GH": "+233",
+    "ML": "+223", "TG": "+228", "BJ": "+229", "NE": "+227", "NG": "+234", "CM": "+237",
+}
+
+def verifier_pays_ip(ip, prefixe_declare):
+    """Retourne (ok, pays_detecte). ok=True si correspondance ou si verification impossible (fail-open)."""
+    try:
+        import urllib.request, json as _json
+        with urllib.request.urlopen(f"http://ip-api.com/json/{ip}?fields=countryCode,country", timeout=3) as resp:
+            data = _json.loads(resp.read().decode())
+        code_iso = data.get("countryCode", "")
+        if not code_iso:
+            return True, None  # echec detection -> on laisse passer
+        prefixe_detecte = ISO_VERS_PREFIXE.get(code_iso)
+        if prefixe_detecte is None:
+            return True, data.get("country")  # pays hors liste -> on laisse passer (pas bloquant)
+        return (prefixe_detecte == prefixe_declare), data.get("country")
+    except Exception:
+        return True, None  # timeout/erreur reseau -> on laisse passer (fail-open)
 STATUTS = ["disponible", "occupe", "ne_pas_deranger", "absent"]
 
 # ══════════════════════════════════════════════════════════
@@ -544,17 +572,31 @@ def gerer_client(conn, addr):
 
                 # ─── INSCRIPTION ──────────────────────────
                 if act == "inscrire":
+                    cle_bf_insc = f"inscrire_{addr[0]}"
+                    if bloque(cle_bf_insc):
+                        envoyer_srv(conn, {"ok":False,"msg":f"Trop de tentatives d'inscription. Reessaie dans {temps_restant(cle_bf_insc)}s."})
+                        continue
                     nom     = p.get("nom","").strip()
                     mdp     = p.get("mdp","").strip()
                     prefixe = p.get("prefixe","+225").strip()
                     couleur = p.get("couleur","cyan")
                     pseudo  = p.get("pseudo","").strip().lstrip("@")
                     email   = p.get("email","").strip()
+                    prefixes_valides = [v[1] for v in PAYS.values()]
 
                     if not nom or len(nom)<2 or len(nom)>20:
+                        signaler_echec(cle_bf_insc)
                         envoyer_srv(conn, {"ok":False,"msg":"Nom: 2 a 20 caracteres."})
                     elif len(mdp)<4:
+                        signaler_echec(cle_bf_insc)
                         envoyer_srv(conn, {"ok":False,"msg":"Mot de passe: minimum 4 caracteres."})
+                    elif prefixe not in prefixes_valides:
+                        signaler_echec(cle_bf_insc)
+                        envoyer_srv(conn, {"ok":False,"msg":"Pays/prefixe invalide."})
+                    elif not verifier_pays_ip(addr[0], prefixe)[0]:
+                        _, pays_reel = verifier_pays_ip(addr[0], prefixe)
+                        signaler_echec(cle_bf_insc)
+                        envoyer_srv(conn, {"ok":False,"msg":f"Le pays declare ne correspond pas a ta localisation detectee ({pays_reel or '?'})."})
                     elif not RE_PSEUDO.match(pseudo):
                         envoyer_srv(conn, {"ok":False,"msg":"Pseudo invalide: 3-20 caracteres, doit commencer par une lettre, lettres/chiffres/underscore uniquement."})
                     elif email and not RE_EMAIL.match(email):
@@ -580,6 +622,7 @@ def gerer_client(conn, addr):
                             "premium_type": None, "active_par": None
                         }
                         fs_save_user(uid, user_data)
+                        signaler_succes(cle_bf_insc)
                         envoyer_srv(conn, {"ok":True,"numero":numero,"nom":nom,"pays":pays,"pseudo":pseudo})
 
                 # ─── CONNEXION (numéro) ───────────────────
