@@ -62,6 +62,35 @@ TRUST_DIR = os.path.join(os.path.expanduser("~"), ".termchat_tls")
 KNOWN_HOSTS = os.path.join(TRUST_DIR, "known_hosts.json")
 IDENTITY_FILE = os.path.join(TRUST_DIR, "identity_key.enc")
 os.makedirs(TRUST_DIR, exist_ok=True)
+TLS_PIN_FILE = KNOWN_HOSTS
+
+
+def empreinte_certificat(sock):
+    cert = sock.getpeercert(binary_form=True)
+    return hashlib.sha256(cert).hexdigest()
+
+
+def verifier_confiance_tls(host, port, empreinte):
+    cle = f"{host}:{port}"
+
+    try:
+        with open(TLS_PIN_FILE, "r", encoding="utf-8") as f:
+            pins = json.load(f)
+    except Exception:
+        pins = {}
+
+    if cle not in pins:
+        pins[cle] = empreinte
+        with open(TLS_PIN_FILE, "w", encoding="utf-8") as f:
+            json.dump(pins, f, indent=2)
+        print(f"{J}🔐 Premier certificat enregistré (TOFU).{Z}")
+        return True
+
+    if pins[cle] != empreinte:
+        print(f"{R}❌ Le certificat du serveur a changé !{Z}")
+        return False
+
+    return True
 
 MAX_FILE_RECV = 15 * 1024 * 1024  # 15 Mo max à la réception
 MAX_FILE_SEND = 50 * 1024 * 1024  # 50 Mo max à l'envoi
@@ -102,85 +131,12 @@ sock_cli = None
 en_cours = True
 reponses = []
 rep_lock = threading.Lock()
+
 phrases_secretes = {}          # numero -> phrase secrète (RAM uniquement)
 ma_cle_privee = None
 cles_partagees_cache = {}      # numero -> clé Fernet dérivée
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  TLS / Pinning TOFU
-# ══════════════════════════════════════════════════════════════════════════════
-
-def empreinte_certificat(sock_tls):
-    """Calcule l'empreinte SHA-256 du certificat présenté par le serveur."""
-    try:
-        der = sock_tls.getpeercert(binary_form=True)
-        if not der:
-            return None
-        return hashlib.sha256(der).hexdigest()
-    except Exception:
-        return None
-
-
-def verifier_confiance_tls(host, port, empreinte):
-    """
-    Pinning TOFU (Trust On First Use).
-    Première connexion : on enregistre l'empreinte après confirmation.
-    Connexions suivantes : on refuse si l'empreinte a changé (sauf validation explicite).
-    """
-    if not empreinte:
-        print(f"{R}⚠️  Aucun certificat reçu du serveur — impossible de vérifier.{Z}")
-        return False
-
-    cle = f"{host}:{port}"
-    connus = {}
-    if os.path.exists(KNOWN_HOSTS):
-        try:
-            with open(KNOWN_HOSTS, "r", encoding="utf-8") as f:
-                connus = json.load(f) or {}
-        except Exception:
-            connus = {}
-
-    if cle not in connus:
-        print(f"{J}🔑 Nouveau serveur — empreinte du certificat :{Z}")
-        print(f"   {B}{empreinte}{Z}")
-        try:
-            rep = input(f"{J}   Faire confiance à cette empreinte et l'enregistrer ? (o/n) : {Z}").strip().lower()
-        except Exception:
-            return False
-        if rep != "o":
-            return False
-        connus[cle] = empreinte
-        try:
-            with open(KNOWN_HOSTS, "w", encoding="utf-8") as f:
-                json.dump(connus, f, indent=2, ensure_ascii=False)
-            try:
-                os.chmod(KNOWN_HOSTS, 0o600)
-            except Exception:
-                pass
-        except Exception as e:
-            print(f"{R}⚠️  Impossible d'écrire {KNOWN_HOSTS}: {e}{Z}")
-        return True
-
-    if connus.get(cle) != empreinte:
-        print(f"{R}⚠️  ALERTE SÉCURITÉ : l'empreinte du certificat de {cle} a CHANGÉ !{Z}")
-        print(f"{R}   Attendue : {connus.get(cle)}{Z}")
-        print(f"{R}   Reçue    : {empreinte}{Z}")
-        print(f"{R}   Cela peut signifier une attaque (interception) ou un{Z}")
-        print(f"{R}   changement légitime de serveur (réinstallation, migration…).{Z}")
-        try:
-            rep = input(f"{J}   Accepter quand même la nouvelle empreinte ? (taper 'confirmer') : {Z}").strip().lower()
-        except Exception:
-            return False
-        if rep != "confirmer":
-            return False
-        connus[cle] = empreinte
-        try:
-            with open(KNOWN_HOSTS, "w", encoding="utf-8") as f:
-                json.dump(connus, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            print(f"{R}⚠️  Impossible d'écrire {KNOWN_HOSTS}: {e}{Z}")
-    return True
+# Le code de connexion TLS est dans main().
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -217,7 +173,7 @@ def charger_ou_creer_identite():
             erreur(f"Impossible de déchiffrer la clé d'identité ({e}).")
             print(f"{J}Si tu as oublié le mot de passe, supprime le fichier :{Z}")
             print(f"   {IDENTITY_FILE}")
-            sys.exit(1)
+
     else:
         priv = X25519PrivateKey.generate()
         raw = priv.private_bytes(
@@ -1806,12 +1762,14 @@ def quitter(sig=None, frame=None):
     print(f"\n{get_C()}{B}À bientôt! 👋{Z}\n")
     sys.exit(0)
 
-
 def main():
     global sock_cli, en_cours, ma_cle_privee
+
     banniere()
+
     host = sys.argv[1] if len(sys.argv) >= 2 else "ballast.proxy.rlwy.net"
     port = int(sys.argv[2]) if len(sys.argv) >= 3 else 57568
+
     print(f"{G}🔌 Connexion à {host}:{port}...{Z}")
 
     try:
@@ -1820,54 +1778,61 @@ def main():
         sock_cli.connect((host, port))
 
         # TLS avec pinning TOFU + minimum TLS 1.2
-        # Note : CERT_NONE est utilisé car le serveur (Railway proxy) utilise
-        # souvent un certificat non reconnu par les CA système.
-        # Le pinning TOFU reste la protection principale contre le MITM.
-        try:
-            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            sock_tls = ctx.wrap_socket(sock_cli, server_hostname=host)
-            empreinte = empreinte_certificat(sock_tls)
-            if not verifier_confiance_tls(host, port, empreinte):
-                erreur("Connexion refusée : empreinte du certificat non validée.")
-                try:
-                    sock_tls.close()
-                except Exception:
-                    pass
-                sys.exit(1)
-            sock_cli = sock_tls
-            print(f"{G}🔐 Connexion chiffrée (TLS 1.2+ · certificat vérifié par pinning){Z}")
-        except SystemExit:
-            raise
-        except Exception as e:
-            erreur(f"Impossible d'établir une connexion chiffrée ({e}) — connexion abandonnée.")
+        # CERT_NONE est utilisé car Railway peut présenter un certificat
+        # non reconnu par les CA système. Le pinning TOFU protège contre
+        # les attaques MITM.
+
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        sock_tls = ctx.wrap_socket(sock_cli, server_hostname=host)
+        empreinte = empreinte_certificat(sock_tls)
+
+        if not verifier_confiance_tls(host, port, empreinte):
+            erreur("Connexion refusée : empreinte du certificat non validée.")
             try:
-                sock_cli.close()
+                sock_tls.close()
             except Exception:
                 pass
             sys.exit(1)
 
+        sock_cli = sock_tls
+
+        print(f"{G}🔐 Connexion chiffrée (TLS 1.2+ · certificat vérifié par pinning){Z}")
+
         sock_cli.settimeout(None)
-        succes("Connecté!")
+        succes("Connecté !")
         print(f"{G}   📥 Fichiers → ~/termchat_downloads/{Z}\n")
+
+    except SystemExit:
+        raise
+
     except Exception as e:
-        erreur(f"Impossible de se connecter: {e}")
+        erreur(f"Impossible de se connecter : {e}")
+        try:
+            if sock_cli:
+                sock_cli.close()
+        except Exception:
+            pass
         sys.exit(1)
 
     threading.Thread(target=recevoir, daemon=True).start()
+
     signal.signal(signal.SIGINT, quitter)
     try:
         signal.signal(signal.SIGTERM, quitter)
     except Exception:
         pass
+
     time.sleep(0.3)
 
     try:
         while en_cours:
             if not session["connecte"]:
                 choix = menu_accueil()
+
                 if choix == "1":
                     inscrire()
                 elif choix == "2":
@@ -1878,6 +1843,7 @@ def main():
                     quitter()
             else:
                 choix = menu_principal()
+
                 if choix == "1":
                     menu_messages()
                 elif choix == "2":
@@ -1902,9 +1868,9 @@ def main():
                     panel_admin()
                 elif choix == "q":
                     quitter()
+
     except KeyboardInterrupt:
         quitter()
-
 
 if __name__ == "__main__":
     main()

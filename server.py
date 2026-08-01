@@ -79,9 +79,9 @@ def preparer_certificat_tls():
     os.makedirs(CERT_DIR, exist_ok=True)
     if os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
         return True
-    if REQUIRE_EXISTING_TLS_CERT or PRODUCTION:
-    return False
-    
+    if REQUIRE_EXISTING_TLS_CERT or PRODUCTION_MODE:
+        return False
+
     try:
         from cryptography import x509
         from cryptography.x509.oid import NameOID
@@ -691,8 +691,13 @@ def envoyer_srv(sock, paquet):
     return True
 
 def livrer(numero, paquet):
-    with lock: s = clients.get(numero)
-    if s: envoyer_srv(s, paquet); return True
+    with lock:
+        s = clients.get(numero)
+
+    if s:
+        envoyer_srv(s, paquet)
+        return True
+
     return False
 
 def notifier_statut(numero, en_ligne):
