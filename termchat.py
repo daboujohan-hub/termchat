@@ -1777,30 +1777,31 @@ def main():
         sock_cli.settimeout(10)
         sock_cli.connect((host, port))
 
-        # TLS avec pinning TOFU + minimum TLS 1.2
-        # CERT_NONE est utilisé car Railway peut présenter un certificat
-        # non reconnu par les CA système. Le pinning TOFU protège contre
-        # les attaques MITM.
+        USE_TLS = os.environ.get("REQUIRE_TLS", "1") != "0"
 
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        if USE_TLS:
+            # TLS avec pinning TOFU + minimum TLS 1.2
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
 
-        sock_tls = ctx.wrap_socket(sock_cli, server_hostname=host)
-        empreinte = empreinte_certificat(sock_tls)
+            sock_tls = ctx.wrap_socket(sock_cli, server_hostname=host)
+            empreinte = empreinte_certificat(sock_tls)
 
-        if not verifier_confiance_tls(host, port, empreinte):
-            erreur("Connexion refusée : empreinte du certificat non validée.")
-            try:
-                sock_tls.close()
-            except Exception:
-                pass
-            sys.exit(1)
+            if not verifier_confiance_tls(host, port, empreinte):
+                erreur("Connexion refusée : empreinte du certificat non validée.")
+                try:
+                    sock_tls.close()
+                except Exception:
+                    pass
+                sys.exit(1)
 
-        sock_cli = sock_tls
+            sock_cli = sock_tls
+            print(f"{G}🔐 Connexion chiffrée (TLS 1.2+ · certificat vérifié par pinning){Z}")
 
-        print(f"{G}🔐 Connexion chiffrée (TLS 1.2+ · certificat vérifié par pinning){Z}")
+        else:
+            print(f"{J}⚠️ Connexion TCP simple (TLS désactivé){Z}")
 
         sock_cli.settimeout(None)
         succes("Connecté !")
