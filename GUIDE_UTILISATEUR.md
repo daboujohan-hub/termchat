@@ -1,4 +1,4 @@
-# 💬 Guide d'utilisation — TermChat v6.0
+# 💬 Guide d'utilisation — TermChat v6.1
 
 **Messagerie terminal chiffrée pour développeurs** — by Aboudev Labs 🇨🇮
 
@@ -44,7 +44,16 @@ Au premier lancement, choisis **1 — Créer un compte**, puis renseigne :
 | Pseudo (@handle) | Oui | 3 à 20 caractères, doit commencer par une lettre, unique |
 | Email | Non | Optionnel, permet de se connecter aussi par email |
 | Mot de passe | Oui | Minimum 4 caractères |
-| Pays | Oui | Choisis dans la liste affichée |
+| Pays | Oui | Choisis dans la liste affichée (11 pays disponibles) |
+
+**Pays disponibles :** Côte d'Ivoire 🇨🇮, Sénégal 🇸🇳, Guinée 🇬🇳, Burkina
+Faso 🇧🇫, Ghana 🇬🇭, Mali 🇲🇱, Togo 🇹🇬, Bénin 🇧🇯, Niger 🇳🇪, Nigeria 🇳🇬,
+Cameroun 🇨🇲.
+
+> ℹ️ TermChat vérifie automatiquement que le pays choisi correspond
+> raisonnablement à ta localisation réseau. Cette vérification est
+> tolérante : en cas de doute (VPN, réseau mobile particulier), elle
+> ne bloque jamais un compte légitime par erreur.
 
 À la fin, TermChat t'attribue un **numéro unique** (ton identifiant
 principal, ex: `+225XXXXXXXXXX`). **Note-le précieusement** — avec ton
@@ -73,18 +82,24 @@ prochaine connexion.
 
 ## 🧭 4. Le menu principal — chaque bouton expliqué
 
+Le menu s'adapte à ton niveau de compte (voir section 7). Voici le menu
+complet, tel qu'il apparaît pour un compte premium :
+
 ```
   1 — 💬  Messages           → voir/écrire tes conversations
   2 — 👥  Groupes             → conversations de groupe
   3 — ⭐  Favoris              → tes contacts favoris
-  4 — 📎  Envoyer un fichier   → envoyer directement un fichier/document
+  4 — 📎  Envoyer un fichier   → envoyer directement un fichier/document (premium)
   6 — 🌐  En ligne             → voir qui est connecté actuellement
   7 — 👤  Mon profil           → nom, pseudo, bio, pays
   8 — 😊  Statut               → disponible / occupé / absent / ne pas déranger
   9 — 🎨  Couleur              → personnaliser la couleur de ton pseudo à l'écran
-  s — 🛡️   Sécurité            → mot de passe, blocage, PIN
+  s — 🛡️   Sécurité            → mot de passe, blocage, PIN, abonnement
   q — 🚪  Déconnecter          → quitter la session
 ```
+
+> En compte **gratuit**, l'option `4 — Envoyer un fichier` n'apparaît
+> pas dans le menu (fonctionnalité réservée au premium).
 
 ---
 
@@ -95,61 +110,84 @@ entre soit :
 - Le **numéro** de ton contact (`+225XXXXXXXXXX`)
 - Ou son **pseudo** précédé d'un `@` (`@johan`)
 
-TermChat te propose ensuite d'**activer le chiffrement**. Si tu acceptes,
-il te demande une **phrase secrète** — c'est le point le plus important
-à comprendre :
-
-> ⚠️ **La phrase secrète doit être transmise à ton contact par un autre
-> moyen** (appel téléphonique, en personne, etc.) — **jamais via
-> TermChat lui-même**. Les deux personnes doivent taper exactement la
-> même phrase pour que les messages soient lisibles des deux côtés.
-> Sans elle, personne — pas même le serveur — ne peut lire vos messages.
+Le **chiffrement de bout en bout s'active automatiquement** dès que la
+conversation s'ouvre — TermChat calcule une clé secrète partagée avec
+ton contact (via ECDH X25519), sans que tu aies rien à faire. Le serveur
+ne voit jamais le contenu de tes messages.
 
 Dans la conversation, commandes utiles :
 | Commande | Effet |
 |---|---|
-| `/fichier` | envoyer un fichier |
+| `/fichier` | envoyer un fichier (premium uniquement) |
 | `/vocal` | envoyer un message vocal |
+| `/payer <code> <montant>` | soumettre un paiement pour activer le premium |
 | `/repondre` | répondre à un message précis |
 | `/reaction` | réagir à un message |
 | `/rechercher` | chercher dans l'historique |
 | `/favori` | ajouter la conversation aux favoris |
 | `exit` | quitter la conversation |
 
+> ⚠️ **Compte gratuit** : les messages sont limités à **150 caractères**.
+> Au-delà, TermChat te propose de passer premium.
+
 ---
 
 ## 🔒 6. Sécurité — ce qui te protège
 
+- **Chiffrement de bout en bout réel** (ECDH X25519 + AES) : même en cas
+  d'accès à la base de données du serveur, le contenu de tes messages
+  reste illisible
 - **Mots de passe** chiffrés (bcrypt), jamais stockés en clair
 - **Anti-bruteforce** : 5 tentatives de connexion max, puis blocage de 5 minutes
-- **TLS** : le trafic tente d'être chiffré automatiquement (repli en
-  clair silencieux si le réseau bloque le chiffrement — l'app continue
-  de fonctionner normalement dans les deux cas)
+- **TLS** sur toute la connexion réseau
 - **Pas de recherche libre d'utilisateurs** : personne ne peut fouiller
-  les profils au hasard — il faut connaître le numéro ou le pseudo exact
+  les profils au hasard — il faut connaître le numéro ou le pseudo exact,
+  et cette recherche est elle-même limitée en fréquence
+- **Protection anti-abus** sur les connexions simultanées et la taille
+  des messages, pour la stabilité du serveur
 
 ---
 
 ## ⭐ 7. Abonnement Premium
 
-TermChat propose un compte **gratuit** et un compte **premium** :
+TermChat propose **4 niveaux de compte** :
 
-| | Gratuit | Premium |
-|---|---|---|
-| Messagerie, vocaux, fichiers | ✅ | ✅ |
-| Groupes | Limités à 5 membres | Illimités |
-| Prix | 0 FCFA | 500-1000 FCFA/mois ou 5000-8000 FCFA/an |
+| | 🔘 Gratuit | ✨ Mensuel | 💎 Annuel | 🏆 Fondateur |
+|---|---|---|---|---|
+| Prix | 0 FCFA | 500 FCFA / mois | 8000 FCFA / an | Offert aux bêta-testeurs |
+| Contacts | 5 max | Illimité | Illimité | Illimité |
+| Membres par groupe | 5 max | Illimité | Illimité | Illimité |
+| Longueur de message | 150 caractères | Illimité | Illimité | Illimité |
+| Fichiers | ❌ | ✅ (50 Mo max) | ✅ (50 Mo max) | ✅ (50 Mo max) |
+| Support prioritaire | ❌ | ❌ | ✅ | ✅ |
+| Durée | — | 30 jours | 365 jours | À vie |
 
-**Comment devenir premium :**
-1. Envoie le paiement par Mobile Money au numéro du développeur
-2. Envoie la capture d'écran de la transaction par WhatsApp
-3. Ton compte est activé sous peu de temps (activation manuelle)
+**Comment passer premium :**
+1. Envoie ton paiement via **Wave** ou **Moov** au numéro **+2250170404109**
+2. Note le code de transaction fourni par ton opérateur
+3. Dans TermChat, tape dans une conversation :
+   ```
+   /payer <code_transaction> <montant>
+   ```
+4. Le développeur vérifie manuellement le paiement et active ton compte
+   — tu reçois une notification automatique dès que c'est fait, avec
+   ton nouveau badge (✨, 💎 ou 🏆)
 
 **Vérifier ton statut :** menu **Sécurité → 6 — Mon abonnement**
 
 ---
 
-## 📂 8. Fichiers reçus
+## 🎨 8. Interface selon ton profil
+
+L'apparence de TermChat s'adapte à ton niveau de compte : couleur de la
+bannière, badge affiché à côté de ton pseudo dans les messages, et
+options visibles dans le menu. Un compte Fondateur, par exemple, a
+également accès à des outils réservés (voir rapports de bugs, logs,
+gestion des utilisateurs).
+
+---
+
+## 📂 9. Fichiers reçus
 
 Tous les fichiers et messages vocaux que tu reçois sont automatiquement
 enregistrés sur ton téléphone dans :
@@ -159,12 +197,7 @@ enregistrés sur ton téléphone dans :
 
 ---
 
-## ❓ 9. Problèmes fréquents
-
-**"TLS indisponible, connexion en clair"** → normal, pas une erreur.
-L'app continue de fonctionner ; c'est juste que le chiffrement du
-transport n'a pas pu s'établir cette fois. Tes messages restent protégés
-si tu as activé le chiffrement par phrase secrète.
+## ❓ 10. Problèmes fréquents
 
 **Le fichier `install.sh` échoue sur `cryptography`** → voir la section
 Installation ci-dessus, méthode manuelle.
@@ -172,6 +205,16 @@ Installation ci-dessus, méthode manuelle.
 **Un ami ne me trouve pas** → vérifie que tu lui as bien donné ton
 numéro exact ou ton `@pseudo` exact (la recherche est stricte, pas de
 correspondance partielle).
+
+**"Message trop long" en gratuit** → la limite de 150 caractères est
+volontaire pour les comptes gratuits ; passe premium pour l'illimité
+(voir section 7).
+
+**Je ne peux pas envoyer de fichier** → l'envoi de fichiers est réservé
+aux comptes premium (voir section 7).
+
+**Mon paiement n'est pas encore activé** → l'activation est manuelle,
+laisse un peu de temps au développeur pour vérifier la transaction.
 
 ---
 
@@ -186,6 +229,7 @@ TermChat est open source. Pour proposer une amélioration :
 **Créateur du projet** : [Diomandé Abou Johan (Aboudev)](https://github.com/daboujohan-hub) — Aboudev Labs, Côte d'Ivoire 🇨🇮
 
 **Transparence sur l'IA** : une partie du code de TermChat a été écrite
-avec l'aide de Claude, une intelligence artificielle d'Anthropic. La
-conception, les décisions de sécurité, et les tests restent de mon
-ressort — l'IA m'aide à écrire et sécuriser le code plus vite.
+avec l'aide d'assistants IA. La conception, les décisions de sécurité,
+et les tests restent de mon ressort — l'IA m'aide à écrire et sécuriser
+le code plus vite.
+
