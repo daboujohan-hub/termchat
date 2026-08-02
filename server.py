@@ -36,7 +36,7 @@ ADMIN_CODE = os.environ.get("ADMIN_CODE", "")
 PRODUCTION_MODE = os.environ.get("PRODUCTION_MODE", "1") != "0"
 REQUIRE_TLS = os.environ.get("REQUIRE_TLS", "1") != "0"
 REQUIRE_FIREBASE = os.environ.get("REQUIRE_FIREBASE", "1") != "0"
-REQUIRE_EXISTING_TLS_CERT = os.environ.get("REQUIRE_EXISTING_TLS_CERT", "1") != "0"
+REQUIRE_EXISTING_TLS_CERT = os.environ.get("REQUIRE_EXISTING_TLS_CERT", "0") != "0"
 ALLOW_SELF_SIGNED_DEV_CERT = os.environ.get("ALLOW_SELF_SIGNED_DEV_CERT", "0") == "1"
 ALLOW_INSECURE_GEOIP_CHECK = os.environ.get("ALLOW_INSECURE_GEOIP_CHECK", "0") == "1"
 ALLOW_LEGACY_SHA256_LOGIN = os.environ.get("ALLOW_LEGACY_SHA256_LOGIN", "0") == "1"
