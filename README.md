@@ -1,8 +1,8 @@
-# 💬 TermChat v6.0
+# 💬 TermChat v6.1
 **Messagerie terminal chiffrée pour développeurs** — by Aboudev Labs 🇨🇮
 
 📖 **Nouveau sur TermChat ?** Lis le [Guide d'utilisation complet](GUIDE_UTILISATEUR.md)
-pour tout comprendre : installation, création de compte, chiffrement, menu.
+pour tout comprendre : installation, création de compte, chiffrement, menu, premium.
 
 ---
 
@@ -23,22 +23,44 @@ bas).
 
 ## 🆕 Journal des mises à jour
 
-### v6.0 (actuelle)
+### v6.1 (actuelle)
+- 🌍 **11 pays supportés** : Côte d'Ivoire, Sénégal, Guinée, Burkina Faso,
+  Ghana, Mali, Togo, Bénin, Niger, Nigeria, Cameroun
+- 🔒 **Vérification du pays par géolocalisation IP** à l'inscription
+  (tolérante : n'empêche jamais un compte légitime en cas de doute)
+- ⭐ **Système premium à 4 niveaux** : Gratuit, Mensuel (500 FCFA),
+  Annuel (8000 FCFA), Fondateur (accès à vie pour les bêta-testeurs)
+- 🏷️ **Badges visuels** selon le niveau : ✨ Mensuel, 💎 Annuel, 🏆 Fondateur
+- 💰 **Paiement intégré** : commande `/payer <code_transaction> <montant>`
+  directement dans l'app, plus besoin d'envoyer une capture par WhatsApp
+- 📎 **Fichiers réservés au premium** (gratuit : messagerie texte uniquement,
+  150 caractères max par message)
+- 🎨 **Interface adaptée au profil** : bannière, couleurs et menu changent
+  selon le niveau de compte
+- 🛡️ **Durcissement sécurité** : comparaison temps-constant sur le code
+  admin, limite de tentatives sur la recherche d'utilisateurs et les
+  soumissions de paiement, protection anti-DoS (limite de connexions
+  simultanées et de taille des messages)
+- ✅ **Bug TLS en production résolu** (l'ancien souci de handshake TLS
+  qui échouait systématiquement sur le proxy Railway est corrigé)
+- 🐛 Corrections de plusieurs cas où le serveur ne répondait pas
+  (groupes, statut, favoris, blocage, couleur, bio)
+
+### v6.0
 - 🔐 Mots de passe chiffrés avec **bcrypt** (migration automatique des anciens comptes)
-- 🔐 Chiffrement des messages **Fernet/AES** avec phrase secrète partagée (remplace l'ancien XOR)
-- 🔐 **TLS** sur la connexion (certificat auto-signé, avec repli en clair si indisponible)
+- 🔐 Chiffrement des messages de bout en bout (**ECDH X25519 + AES**),
+  activé automatiquement — repli par phrase secrète partagée si besoin
+- 🔐 **TLS** sur la connexion
 - 🛡️ Protection **anti-bruteforce** (5 tentatives max, blocage 5 min) sur login/PIN/admin
 - 🏷️ **Pseudo unique** (@handle) pour retrouver facilement un contact
-- 📧 **Connexion par email** en plus du nom et du numéro
-- 📎 Correction : les fichiers et messages vocaux apparaissent maintenant bien dans l'historique
-- 🔍 Suppression de la recherche libre d'utilisateurs (protection de la vie privée) — remplacée par une recherche stricte par numéro ou pseudo exact
-- ⚙️ Serveur rendu plus robuste (le handshake TLS ne bloque plus les autres connexions)
+- 📧 **Connexion par email** en plus du numéro
+- 🔍 Recherche stricte par numéro ou pseudo exact (protection de la vie privée)
 
 ### Versions antérieures
 - Base de données Firebase Firestore (données permanentes)
 - Accès libre, sans système de paiement
 - Interface messages avec liste des conversations
-- 5 pays disponibles : CI, SN, GN, BF, GH
+- 5 pays disponibles initialement (CI, SN, GN, BF, GH)
 
 ---
 
@@ -52,12 +74,14 @@ termchat
 Détails complets, création de compte et utilisation : voir le
 [Guide d'utilisation](GUIDE_UTILISATEUR.md).
 
-## ⚙️ Variable d'environnement Railway (pour héberger ton propre serveur)
+## ⚙️ Variables d'environnement Railway (pour héberger ton propre serveur)
 
 | Variable | Description |
 |---|---|
 | `FIREBASE_CREDS` | Contenu JSON complet des identifiants Firebase |
-| `ADMIN_CODE` | Code d'accès admin (sinon valeur par défaut peu sûre) |
+| `ADMIN_CODE` | Code d'accès admin (minimum 12 caractères, aléatoire) |
+| `PRODUCTION_MODE` | `0` ou `1` — active les vérifications strictes de production |
+| `REQUIRE_EXISTING_TLS_CERT` | `0` ou `1` — `0` recommandé pour laisser le serveur générer son certificat automatiquement |
 | `PORT` | Port d'écoute (fourni automatiquement par Railway) |
 
 ---
@@ -79,8 +103,6 @@ apprendre Python, Firebase, la cryptographie appliquée et les outils CLI.
 
 ---
 
----
-
 ## 💌 Donner ton avis / signaler un problème
 
 Deux façons de faire remonter une remarque, un bug ou une idée :
@@ -94,18 +116,19 @@ Deux façons de faire remonter une remarque, un bug ou une idée :
 
 ## 🐛 Tâches ouvertes (Good First Issues)
 
-1. **Diagnostiquer l'échec systématique du handshake TLS** sur le proxy
-   Railway (le repli en clair fonctionne, mais le TLS échoue toujours —
-   piste à creuser côté configuration proxy).
-2. **Ajouter la possibilité de modifier l'email** depuis "Mon profil"
+1. **Ajouter la possibilité de modifier l'email** depuis "Mon profil"
    pour les comptes existants (actuellement modifiable seulement à
    l'inscription).
-3. **Tests automatisés** pour les actions serveur principales
+2. **Tests automatisés** pour les actions serveur principales
    (inscription, connexion, envoi de message).
-4. **Documentation des actions du protocole** (`inscrire`, `connecter_numero`,
+3. **Documentation des actions du protocole** (`inscrire`, `connecter_numero`,
    `connecter_email`, `message`, etc.) dans un fichier `PROTOCOL.md`.
-5. **Support d'un 6ème pays** avec son indicatif et sa validation.
+4. **Vérification d'empreinte de clé publique** entre contacts (comme les
+   "numéros de sécurité" de Signal), pour se prémunir d'un serveur compromis.
+5. **Suppression d'un message précis** (aujourd'hui, seule la suppression
+   de tout un historique de conversation existe).
 
 Si une tâche t'intéresse, ouvre une issue GitHub en précisant laquelle
 tu prends, pour éviter que deux personnes travaillent dessus en même
 temps.
+
