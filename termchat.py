@@ -83,6 +83,10 @@ def verifier_confiance_tls(host, port, empreinte):
         pins[cle] = empreinte
         with open(TLS_PIN_FILE, "w", encoding="utf-8") as f:
             json.dump(pins, f, indent=2)
+        try:
+            os.chmod(TLS_PIN_FILE, 0o600)
+        except Exception:
+            pass
         print(f"{J}🔐 Premier certificat enregistré (TOFU).{Z}")
         return True
 
@@ -1398,10 +1402,25 @@ def menu_securite():
         print(f"  {C2}4{Z} — 🔢  Code PIN")
         print(f"  {C2}5{Z} — 🗑️   Supprimer mon compte")
         print(f"  {C2}6{Z} — ⭐  Mon abonnement")
+        print(f"  {C2}7{Z} — 🔓  Oublier ce serveur (reinitialiser la confiance TLS)")
         print(f"  {C2}r{Z} — 🔙  Retour\n")
         choix = input(f"{J}Choix: {Z}").strip().lower()
 
-        if choix == "1":
+        if choix == "7":
+            print(f"\n{J}⚠️  Ceci supprime les empreintes de certificats memorisees.{Z}")
+            print(f"{J}   La prochaine connexion fera confiance au nouveau certificat sans avertissement.{Z}")
+            conf = input(f"{R}Confirmer ? (oui/non): {Z}").strip().lower()
+            if conf == "oui":
+                try:
+                    if os.path.exists(TLS_PIN_FILE):
+                        os.remove(TLS_PIN_FILE)
+                    succes("Confiance reinitialisee. Reconnecte-toi pour reenregistrer le certificat actuel.")
+                except Exception as e:
+                    erreur(f"Erreur: {e}")
+            else:
+                print(f"{G}Annule.{Z}")
+            entree()
+        elif choix == "1":
             ancien = input("Ancien mdp: ").strip()
             nouveau = input("Nouveau mdp: ").strip()
             confirm = input("Confirmer: ").strip()
