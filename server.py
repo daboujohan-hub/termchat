@@ -1216,20 +1216,32 @@ def gerer_client(conn, addr):
 
                 # ─── PIN ──────────────────────────────────
                 elif act == "definir_pin":
-                    if num_co:
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
                         pin = p.get("pin","").strip()
                         if len(pin)!=4 or not pin.isdigit(): envoyer_srv(conn, {"ok":False,"msg":"Le PIN doit etre 4 chiffres."})
                         else:
                             uid, _ = fs_get_user_by_numero(num_co)
-                            if uid: fs_update_user(uid, {"pin":hacher(pin)}); envoyer_srv(conn, {"ok":True,"msg":"Code PIN active!"})
+                            if not uid:
+                                envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                            else:
+                                fs_update_user(uid, {"pin":hacher(pin)}); envoyer_srv(conn, {"ok":True,"msg":"Code PIN active!"})
 
                 elif act == "supprimer_pin":
-                    if num_co:
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
                         uid, _ = fs_get_user_by_numero(num_co)
-                        if uid: fs_update_user(uid, {"pin":None}); envoyer_srv(conn, {"ok":True,"msg":"Code PIN desactive."})
+                        if not uid:
+                            envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        else:
+                            fs_update_user(uid, {"pin":None}); envoyer_srv(conn, {"ok":True,"msg":"Code PIN desactive."})
 
                 elif act == "verifier_pin":
-                    if num_co:
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
                         cle_bf = f"pin_{num_co}"
                         if bloque(cle_bf):
                             envoyer_srv(conn, {"ok":False,"msg":f"Trop de tentatives. Reessaie dans {temps_restant(cle_bf)}s."})
