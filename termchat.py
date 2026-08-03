@@ -1843,6 +1843,16 @@ def main():
                 elif choix == "q":
                     quitter()
             else:
+                # Rafraichir le statut premium a chaque retour au menu principal
+                # (corrige l'affichage qui restait fige apres expiration)
+                try:
+                    envoyer_cli({"action": "verifier_mon_abonnement"})
+                    rep_abo = attendre(4)
+                    if rep_abo and rep_abo.get("ok"):
+                        session["premium"] = rep_abo.get("premium", False)
+                        session["premium_type"] = rep_abo.get("premium_type")
+                except Exception:
+                    pass
                 choix = menu_principal()
 
                 if choix == "1":
