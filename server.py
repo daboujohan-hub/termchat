@@ -77,6 +77,22 @@ def preparer_certificat_tls():
     L'auto-signé n'est autorisé qu'en mode développement local explicite.
     """
     os.makedirs(CERT_DIR, exist_ok=True)
+
+    # Si un certificat fixe est fourni via variables d'environnement, l'utiliser en priorite
+    cert_b64 = os.environ.get("CERT_B64", "")
+    key_b64 = os.environ.get("KEY_B64", "")
+    if cert_b64 and key_b64:
+        try:
+            with open(CERT_FILE, "wb") as f:
+                f.write(base64.b64decode(cert_b64))
+            with open(KEY_FILE, "wb") as f:
+                f.write(base64.b64decode(key_b64))
+            os.chmod(KEY_FILE, 0o600)
+            print("Certificat fixe charge depuis CERT_B64/KEY_B64.")
+            return True
+        except Exception as e:
+            print(f"Erreur chargement certificat fixe: {e}")
+
     if os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
         return True
     if REQUIRE_EXISTING_TLS_CERT or PRODUCTION_MODE:
