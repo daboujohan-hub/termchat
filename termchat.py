@@ -1597,9 +1597,10 @@ def panel_admin():
                 titre("👥 UTILISATEURS")
                 for u in rep.get("users", []):
                     st = f"{V}🟢{Z}" if u.get("en_ligne") else f"{G}⚫{Z}"
+                    alerte = f" {R}⚠️  pays incoherent{Z}" if u.get("pays_incoherent") else ""
                     print(
                         f"  {st} {u.get('nom', '?'):<12} {u.get('numero', '')}  "
-                        f"{G}{u.get('pays', '')}{Z}"
+                        f"{G}{u.get('pays', '')}{Z}{alerte}"
                     )
                     print(f"     {G}Inscrit: {u.get('inscription', '')}{Z}")
             else:

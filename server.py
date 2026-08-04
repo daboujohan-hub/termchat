@@ -816,9 +816,6 @@ def gerer_client(conn, addr):
                     elif prefixe not in prefixes_valides:
                         signaler_echec(cle_bf_insc)
                         envoyer_srv(conn, {"ok":False,"msg":"Pays/prefixe invalide."})
-                    elif not geo_ok:
-                        signaler_echec(cle_bf_insc)
-                        envoyer_srv(conn, {"ok":False,"msg":f"Le pays déclaré ne correspond pas à la localisation détectée ({pays_reel or '?' })."})
                     elif not RE_PSEUDO.match(pseudo):
                         envoyer_srv(conn, {"ok":False,"msg":"Pseudo invalide: 3-20 caractères, doit commencer par une lettre, lettres/chiffres/underscore uniquement."})
                     elif email and not RE_EMAIL.match(email):
@@ -841,8 +838,12 @@ def gerer_client(conn, addr):
                             "favoris": [], "bloque": [], "est_admin": False, "pin": None,
                             "cle_publique": (p.get("cle_publique") or "")[:8192] or None,
                             "premium": False, "premium_expire": None,
-                            "premium_type": None, "active_par": None
+                            "premium_type": None, "active_par": None,
+                            "pays_incoherent": (not geo_ok),
+                            "pays_detecte_ip": pays_reel
                         }
+                        if not geo_ok:
+                            print(f"⚠️  Inscription avec pays incoherent: {nom} declare {pays} mais IP detectee comme {pays_reel or '?'}")
                         fs_save_user(uid, user_data)
                         signaler_succes(cle_bf_insc)
                         envoyer_srv(conn, {"ok":True,"numero":numero,"nom":nom,"pays":pays,"pseudo":pseudo})
@@ -1564,7 +1565,8 @@ def gerer_client(conn, addr):
                                     u = doc.to_dict() or {}
                                     users.append({"nom":u.get("nom","?"),"numero":u.get("numero","?"),"pays":u.get("pays",""),
                                         "inscription":(u.get("inscription") or "")[:10],
-                                        "en_ligne":u.get("numero") in ens})
+                                        "en_ligne":u.get("numero") in ens,
+                                        "pays_incoherent":u.get("pays_incoherent", False)})
                                 envoyer_srv(conn, {"ok":True,"users":users})
                             except Exception as e: envoyer_srv(conn, {"ok":False,"msg":str(e)})
 
