@@ -60,7 +60,10 @@ os.makedirs(DOWNLOADS, exist_ok=True)
 
 TRUST_DIR = os.path.join(os.path.expanduser("~"), ".termchat_tls")
 KNOWN_HOSTS = os.path.join(TRUST_DIR, "known_hosts.json")
-IDENTITY_FILE = os.path.join(TRUST_DIR, "identity_key.enc")
+def _identity_file_pour(numero):
+    """Chaque compte a son propre fichier de cle d'identite, isole par numero."""
+    safe_num = "".join(c for c in (numero or "defaut") if c.isalnum() or c == "+")
+    return os.path.join(TRUST_DIR, f"identity_key_{safe_num}.enc")
 os.makedirs(TRUST_DIR, exist_ok=True)
 TLS_PIN_FILE = KNOWN_HOSTS
 
@@ -159,11 +162,12 @@ def _deriver_cle_fichier(mdp: str, salt: bytes) -> bytes:
     return kdf.derive(mdp.encode())
 
 
-def charger_ou_creer_identite():
+def charger_ou_creer_identite(numero=None):
     """Charge la clé privée X25519 chiffrée, ou en crée une protégée par mot de passe."""
-    if os.path.exists(IDENTITY_FILE):
+    identity_file = _identity_file_pour(numero)
+    if os.path.exists(identity_file):
         try:
-            with open(IDENTITY_FILE, "rb") as f:
+            with open(identity_file, "rb") as f:
                 data = f.read()
             if len(data) < 17:
                 raise ValueError("Fichier identité corrompu")
@@ -176,7 +180,7 @@ def charger_ou_creer_identite():
         except Exception as e:
             erreur(f"Impossible de déchiffrer la clé d'identité ({e}).")
             print(f"{J}Si tu as oublié le mot de passe, supprime le fichier :{Z}")
-            print(f"   {IDENTITY_FILE}")
+            print(f"   {identity_file}")
 
     else:
         priv = X25519PrivateKey.generate()
@@ -204,10 +208,10 @@ def charger_ou_creer_identite():
         fernet = Fernet(base64.urlsafe_b64encode(key))
         ciphertext = fernet.encrypt(raw)
 
-        with open(IDENTITY_FILE, "wb") as f:
+        with open(identity_file, "wb") as f:
             f.write(salt + ciphertext)
         try:
-            os.chmod(IDENTITY_FILE, 0o600)
+            os.chmod(identity_file, 0o600)
         except Exception:
             pass
         succes("Clé d'identité créée et protégée.")
@@ -221,6 +225,15 @@ def cle_publique_b64(priv):
     )
     return base64.urlsafe_b64encode(pub).decode()
 
+
+def calculer_empreinte_verification(ma_cle_pub_b64, cle_pub_pair_b64):
+    """Calcule une empreinte courte a partir des deux cles publiques (verification manuelle anti-MITM)."""
+    import hashlib
+    cles = sorted([ma_cle_pub_b64 or "", cle_pub_pair_b64 or ""])
+    combinaison = (cles[0] + cles[1]).encode()
+    h = hashlib.sha256(combinaison).hexdigest()
+    groupes = [h[i:i+5] for i in range(0, 30, 5)]
+    return " ".join(groupes).upper()
 
 def deriver_cle_partagee(ma_cle_privee, cle_publique_pair_b64, n1, n2):
     """Établit une clé symétrique via ECDH X25519 + HKDF (versionnée)."""
@@ -742,7 +755,7 @@ def _finaliser_connexion(rep):
         }
     )
     global ma_cle_privee
-    ma_cle_privee = charger_ou_creer_identite()
+    ma_cle_privee = charger_ou_creer_identite(session.get("numero"))
     try:
         envoyer_cli(
             {
@@ -918,7 +931,7 @@ def _ouvrir_chat(nd):
     expire_prochain = None
     print(
         f"\n{G}exit | /fichier | /vocal | /auto N | /repondre | /reaction "
-        f"| /rechercher | /effacer | /favori{Z}\n"
+        f"| /rechercher | /effacer | /favori | /empreinte{Z}\n"
     )
 
     while en_cours and session.get("connecte"):
@@ -961,6 +974,16 @@ def _ouvrir_chat(nd):
                     succes(rep.get("msg", ""))
                 else:
                     erreur(rep.get("msg", "?") if rep else "?")
+            continue
+
+        if texte == "/empreinte":
+            if not cle_pub_pair or not ma_cle_privee:
+                erreur("Chiffrement non actif pour cette conversation.")
+            else:
+                ma_pub = cle_publique_b64(ma_cle_privee)
+                emp = calculer_empreinte_verification(ma_pub, cle_pub_pair)
+                print(f"\n{J}🔐 Empreinte de verification (compare-la avec {nd} par un autre moyen):{Z}")
+                print(f"{B}{emp}{Z}\n")
             continue
 
         if texte.startswith("/auto "):
