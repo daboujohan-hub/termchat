@@ -406,6 +406,18 @@ def fs_delete_user(uid):
     try: db.collection("users").document(uid).delete()
     except Exception as e: print(f"Firestore erreur: {e}")
 
+def fs_log_audit(admin_numero, action, cible="", details=""):
+    """Enregistre une action admin dans le journal d'audit (jamais modifiable/supprimable via l'app)."""
+    if not db: return
+    try:
+        aid = f"audit_{int(time.time())}_{random.randint(1000,9999)}"
+        db.collection("audit_log").document(aid).set({
+            "admin": admin_numero, "action": action, "cible": cible,
+            "details": details, "heure": horodatage()
+        })
+    except Exception as e:
+        print(f"Firestore erreur (audit): {e}")
+
 def fs_save_feedback(numero, nom, texte, prioritaire=False):
     if not db: return
     try:
@@ -1484,6 +1496,7 @@ def gerer_client(conn, addr):
                         uid, user = fs_get_user_by_numero(cible)
                         if not uid: envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
                         else:
+                            fs_log_audit(num_co, "activer_premium", cible, type_abo)
                             if type_abo == "fondateur":
                                 expire = None
                                 fs_update_user(uid, {"premium":True,"premium_expire":expire,
@@ -1505,6 +1518,7 @@ def gerer_client(conn, addr):
                         uid, _ = fs_get_user_by_numero(cible)
                         if not uid: envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
                         else:
+                            fs_log_audit(num_co, "desactiver_premium", cible)
                             fs_update_user(uid, {"premium":False,"premium_expire":None,"premium_type":None})
                             envoyer_srv(conn, {"ok":True,"msg":f"Premium desactive pour {cible}."})
 
@@ -1582,6 +1596,7 @@ def gerer_client(conn, addr):
                     if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         cible = p.get("numero","").strip()
+                        fs_log_audit(num_co, "kick", cible)
                         with lock: s = clients.get(cible)
                         if s:
                             envoyer_srv(s, {"type":"kick","msg":"Deconnecte par l'administrateur."})
@@ -1609,6 +1624,19 @@ def gerer_client(conn, addr):
                     else:
                         paiements = fs_get_paiements_attente()
                         envoyer_srv(conn, {"ok":True,"paiements":paiements})
+
+                elif act == "admin_audit_log":
+                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else:
+                        if not db:
+                            envoyer_srv(conn, {"ok":False,"msg":"Base de donnees indisponible."})
+                        else:
+                            try:
+                                docs = db.collection("audit_log").order_by("heure", direction=firestore.Query.DESCENDING).limit(30).stream()
+                                entries = [d.to_dict() for d in docs]
+                                envoyer_srv(conn, {"ok":True,"entries":entries})
+                            except Exception as e:
+                                envoyer_srv(conn, {"ok":False,"msg":str(e)})
 
                 elif act == "admin_confirmer_paiement":
                     if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})

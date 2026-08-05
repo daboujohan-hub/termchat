@@ -1596,6 +1596,7 @@ def panel_admin():
         print(f"  {C2}6{Z} — ⭐  Gérer premium (activer/désactiver)")
         print(f"  {C2}7{Z} — 📩  Message à un utilisateur")
         print(f"  {C2}8{Z} — 💰  Paiements en attente")
+        print(f"  {C2}9{Z} — 📜  Journal d'audit")
         print(f"  {C2}r{Z} — 🔙  Retour\n")
         choix = input(f"{J}Choix: {Z}").strip().lower()
 
@@ -1720,6 +1721,22 @@ def panel_admin():
                                 succes(rep2.get("msg", ""))
                             else:
                                 erreur(rep2.get("msg", "?") if rep2 else "?")
+            else:
+                erreur("Erreur.")
+            entree()
+
+        elif choix == "9":
+            envoyer_cli({"action": "admin_audit_log"})
+            rep = attendre(10)
+            if rep and rep.get("ok"):
+                entries = rep.get("entries", [])
+                titre(f"📜 JOURNAL D'AUDIT (30 dernieres actions)")
+                if not entries:
+                    print(f"  {G}Aucune action enregistree.{Z}")
+                else:
+                    for e in entries:
+                        print(f"  {G}{e.get('heure','?')}{Z} — {C2}{e.get('admin','?')}{Z}")
+                        print(f"     Action: {e.get('action','?')}  Cible: {e.get('cible','') or '-'}  {e.get('details','')}")
             else:
                 erreur("Erreur.")
             entree()
