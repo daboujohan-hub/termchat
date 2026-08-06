@@ -406,6 +406,39 @@ def fs_delete_user(uid):
     try: db.collection("users").document(uid).delete()
     except Exception as e: print(f"Firestore erreur: {e}")
 
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+RESEND_FROM = os.environ.get("RESEND_FROM", "onboarding@resend.dev")
+
+def envoyer_email_resend(destinataire, sujet, corps_html):
+    """Envoie un email via l'API Resend (urllib, pas de dependance supplementaire)."""
+    if not RESEND_API_KEY:
+        print("RESEND_API_KEY non configuree, email non envoye.")
+        return False
+    try:
+        import urllib.request
+        payload = json.dumps({
+            "from": RESEND_FROM,
+            "to": [destinataire],
+            "subject": sujet,
+            "html": corps_html
+        }).encode()
+        req = urllib.request.Request(
+            "https://api.resend.com/emails",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            return resp.status in (200, 201)
+    except Exception as e:
+        print(f"Erreur envoi email Resend: {e}")
+        return False
+
+otp_2fa_pendants = {}  # numero -> {"code_hash":..., "expire":timestamp, "uid":...}
+
 def fs_log_audit(admin_numero, action, cible="", details=""):
     """Enregistre une action admin dans le journal d'audit (jamais modifiable/supprimable via l'app)."""
     if not db: return
@@ -881,7 +914,20 @@ def gerer_client(conn, addr):
                         signaler_succes(cle_bf_acct)
                         if ALLOW_LEGACY_SHA256_LOGIN and not user.get("mdp","").startswith(("$2b$","$2a$")):
                             fs_update_user(uid, {"mdp": hacher(mdp)})
-                        num_co, est_admin = _connecter_user(conn, user, uid)
+                        if user.get("email"):
+                            code_otp = f"{random.randint(0,999999):06d}"
+                            with lock:
+                                otp_2fa_pendants[user.get("numero")] = {
+                                    "code_hash": hashlib.sha256(code_otp.encode()).hexdigest(),
+                                    "expire": time.time() + 300,
+                                    "uid": uid
+                                }
+                            envoyer_email_resend(user.get("email"),
+                                "Ton code de connexion TermChat",
+                                f"<p>Ton code de verification est : <b>{code_otp}</b></p><p>Valide 5 minutes.</p>")
+                            envoyer_srv(conn, {"ok":True,"besoin_2fa":True,"numero":user.get("numero")})
+                        else:
+                            num_co, est_admin = _connecter_user(conn, user, uid)
 
                 # ─── CONNEXION (email) ─────────────────────
                 # ─── CONNEXION (email) ─────────────────────
@@ -905,9 +951,48 @@ def gerer_client(conn, addr):
                         signaler_succes(cle_bf_acct)
                         if ALLOW_LEGACY_SHA256_LOGIN and not user.get("mdp","").startswith(("$2b$","$2a$")):
                             fs_update_user(uid, {"mdp": hacher(mdp)})
-                        num_co, est_admin = _connecter_user(conn, user, uid)
+                        if user.get("email"):
+                            code_otp = f"{random.randint(0,999999):06d}"
+                            with lock:
+                                otp_2fa_pendants[user.get("numero")] = {
+                                    "code_hash": hashlib.sha256(code_otp.encode()).hexdigest(),
+                                    "expire": time.time() + 300,
+                                    "uid": uid
+                                }
+                            envoyer_email_resend(user.get("email"),
+                                "Ton code de connexion TermChat",
+                                f"<p>Ton code de verification est : <b>{code_otp}</b></p><p>Valide 5 minutes.</p>")
+                            envoyer_srv(conn, {"ok":True,"besoin_2fa":True,"numero":user.get("numero")})
+                        else:
+                            num_co, est_admin = _connecter_user(conn, user, uid)
 
-                # ─── DEFINIR PSEUDO (migration anciens comptes) ──
+                elif act == "verifier_2fa":
+                    numero_2fa = p.get("numero","").strip()
+                    code_saisi = p.get("code","").strip()
+                    cle_bf_2fa = f"2fa_{numero_2fa}"
+                    if bloque(cle_bf_2fa):
+                        envoyer_srv(conn, {"ok":False,"msg":f"Trop de tentatives. Reessaie dans {temps_restant(cle_bf_2fa)}s."})
+                        continue
+                    with lock:
+                        pending = otp_2fa_pendants.get(numero_2fa)
+                    if not pending or time.time() > pending["expire"]:
+                        signaler_echec(cle_bf_2fa)
+                        envoyer_srv(conn, {"ok":False,"msg":"Code expire ou introuvable. Reconnecte-toi."})
+                        continue
+                    if hashlib.sha256(code_saisi.encode()).hexdigest() != pending["code_hash"]:
+                        signaler_echec(cle_bf_2fa)
+                        envoyer_srv(conn, {"ok":False,"msg":"Code incorrect."})
+                        continue
+                    signaler_succes(cle_bf_2fa)
+                    with lock:
+                        otp_2fa_pendants.pop(numero_2fa, None)
+                    uid_2fa = pending["uid"]
+                    _, user_2fa = fs_get_user_by_numero(numero_2fa)
+                    if not user_2fa:
+                        envoyer_srv(conn, {"ok":False,"msg":"Compte introuvable."})
+                        continue
+                    num_co, est_admin = _connecter_user(conn, user_2fa, uid_2fa)
+
                 # ─── DEFINIR PSEUDO (migration anciens comptes) ──
                 elif act == "definir_pseudo":
                     if not num_co:

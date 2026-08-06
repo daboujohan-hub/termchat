@@ -713,10 +713,25 @@ def connecter_par_numero():
     mdp = input("Mot de passe: ").strip()
     envoyer_cli({"action": "connecter_numero", "numero": numero, "mdp": mdp})
     rep = attendre()
+    if rep and rep.get("ok") and rep.get("besoin_2fa"):
+        _demander_code_2fa(rep.get("numero", numero))
+        return
     if rep and rep.get("ok"):
         _finaliser_connexion(rep)
         return
     erreur(rep.get("msg", "Erreur") if rep else "Pas de réponse.")
+    entree()
+
+
+def _demander_code_2fa(numero):
+    print(f"\n{J}📧 Un code de verification a ete envoye par email.{Z}")
+    code = input("Code (6 chiffres): ").strip()
+    envoyer_cli({"action": "verifier_2fa", "numero": numero, "code": code})
+    rep2 = attendre()
+    if rep2 and rep2.get("ok"):
+        _finaliser_connexion(rep2)
+        return
+    erreur(rep2.get("msg", "Erreur") if rep2 else "Pas de réponse.")
     entree()
 
 
@@ -726,6 +741,9 @@ def connecter_par_email():
     mdp = input("Mot de passe: ").strip()
     envoyer_cli({"action": "connecter_email", "email": email, "mdp": mdp})
     rep = attendre()
+    if rep and rep.get("ok") and rep.get("besoin_2fa"):
+        _demander_code_2fa(rep.get("numero", ""))
+        return
     if rep and rep.get("ok"):
         _finaliser_connexion(rep)
         return
