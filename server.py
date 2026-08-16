@@ -12,7 +12,7 @@ Correctifs sécurité v6.1 :
 - Nettoyage code (doublons de commentaires)
 """
 
-import socket, threading, json, os, hashlib, re, uuid, binascii, ipaddress
+import socket, threading, json, os, hashlib, re, uuid, binascii, ipaddress, random
 import datetime, time, base64, signal, sys, ssl, secrets
 from pathlib import Path
 import bcrypt
