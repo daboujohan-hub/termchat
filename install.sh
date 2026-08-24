@@ -1,8 +1,8 @@
 #!/bin/bash
 echo ""
 echo "╔══════════════════════════════════════════════╗"
-echo "║  💬  TERMCHAT v6.0 — Installation           ║"
-echo "║  by Aboudev Labs 🇨🇮                         ║"
+echo "║  💬 TERMCHAT v6.1 Installation DEV.D.A.J    ║"
+echo "║  by Aboudev Labs 🇨🇮 @github.dev.d.a.j       ║"
 echo "╚══════════════════════════════════════════════╝"
 echo ""
 

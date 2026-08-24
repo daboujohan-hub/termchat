@@ -1,4 +1,10 @@
 # 💬 Guide d'utilisation — TermChat v6.1
+# by Aboudev Labs 🇨🇮 @github.dev.d.a.j
+#💬 TERMCHAT v6.1 Installation DEV.D.A.J
+
+___                                               ___       
+                  TERMCHAT° 01/01/2027  
+___                      00H00                    ___
 
 **Messagerie terminal chiffrée pour développeurs** — by Aboudev Labs 🇨🇮
 
