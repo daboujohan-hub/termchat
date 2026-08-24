@@ -914,20 +914,7 @@ def gerer_client(conn, addr):
                         signaler_succes(cle_bf_acct)
                         if ALLOW_LEGACY_SHA256_LOGIN and not user.get("mdp","").startswith(("$2b$","$2a$")):
                             fs_update_user(uid, {"mdp": hacher(mdp)})
-                        if user.get("email"):
-                            code_otp = f"{random.randint(0,999999):06d}"
-                            with lock:
-                                otp_2fa_pendants[user.get("numero")] = {
-                                    "code_hash": hashlib.sha256(code_otp.encode()).hexdigest(),
-                                    "expire": time.time() + 300,
-                                    "uid": uid
-                                }
-                            envoyer_email_resend(user.get("email"),
-                                "Ton code de connexion TermChat",
-                                f"<p>Ton code de verification est : <b>{code_otp}</b></p><p>Valide 5 minutes.</p>")
-                            envoyer_srv(conn, {"ok":True,"besoin_2fa":True,"numero":user.get("numero")})
-                        else:
-                            num_co, est_admin = _connecter_user(conn, user, uid)
+                        num_co, est_admin = _connecter_user(conn, user, uid)
 
                 # ─── CONNEXION (email) ─────────────────────
                 # ─── CONNEXION (email) ─────────────────────
@@ -951,20 +938,7 @@ def gerer_client(conn, addr):
                         signaler_succes(cle_bf_acct)
                         if ALLOW_LEGACY_SHA256_LOGIN and not user.get("mdp","").startswith(("$2b$","$2a$")):
                             fs_update_user(uid, {"mdp": hacher(mdp)})
-                        if user.get("email"):
-                            code_otp = f"{random.randint(0,999999):06d}"
-                            with lock:
-                                otp_2fa_pendants[user.get("numero")] = {
-                                    "code_hash": hashlib.sha256(code_otp.encode()).hexdigest(),
-                                    "expire": time.time() + 300,
-                                    "uid": uid
-                                }
-                            envoyer_email_resend(user.get("email"),
-                                "Ton code de connexion TermChat",
-                                f"<p>Ton code de verification est : <b>{code_otp}</b></p><p>Valide 5 minutes.</p>")
-                            envoyer_srv(conn, {"ok":True,"besoin_2fa":True,"numero":user.get("numero")})
-                        else:
-                            num_co, est_admin = _connecter_user(conn, user, uid)
+                        num_co, est_admin = _connecter_user(conn, user, uid)
 
                 elif act == "verifier_2fa":
                     numero_2fa = p.get("numero","").strip()
