@@ -1,9 +1,9 @@
-# 💬 Guide d'utilisation — TermChat v6.1
+# 💬 Guide d'utilisation — TermChat v6.3
 # by Aboudev Labs 🇨🇮 @github.dev.d.a.j
 #💬 TERMCHAT v6.1 Installation DEV.D.A.J
 
-___                                               ___       
-                  TERMCHAT° 01/01/2027  
+___                                               ___
+                  TERMCHAT° 26/08/2026
 ___                      00H00                    ___
 
 **Messagerie terminal chiffrée pour développeurs** — by Aboudev Labs 🇨🇮
@@ -131,6 +131,7 @@ Dans la conversation, commandes utiles :
 | `/reaction` | réagir à un message |
 | `/rechercher` | chercher dans l'historique |
 | `/favori` | ajouter la conversation aux favoris |
+| `/signaler` | signaler un utilisateur abusif à l'administration |
 | `exit` | quitter la conversation |
 
 > ⚠️ **Compte gratuit** : les messages sont limités à **150 caractères**.
@@ -146,11 +147,16 @@ Dans la conversation, commandes utiles :
 - **Mots de passe** chiffrés (bcrypt), jamais stockés en clair
 - **Anti-bruteforce** : 5 tentatives de connexion max, puis blocage de 5 minutes
 - **TLS** sur toute la connexion réseau
+- **Limite de sessions** : 3 connexions simultanées max par compte
+- **Audit log** : toutes les actions sensibles sont enregistrées
+  (connexions, échecs, modifications, signalements)
 - **Pas de recherche libre d'utilisateurs** : personne ne peut fouiller
   les profils au hasard — il faut connaître le numéro ou le pseudo exact,
   et cette recherche est elle-même limitée en fréquence
 - **Protection anti-abus** sur les connexions simultanées et la taille
   des messages, pour la stabilité du serveur
+- **Signalement** : tu peux signaler un utilisateur abusif avec `/signaler`
+  dans une conversation — l'administration reçoit l'alerte et peut agir
 
 ---
 
@@ -224,6 +230,33 @@ laisse un peu de temps au développeur pour vérifier la transaction.
 
 ---
 
+## 🛡️ 11. Panel Admin (réservé)
+
+Si ton compte a le flag administrateur, le menu affiche **0 — Panel Admin**.
+
+Fonctionnalités de surveillance disponibles :
+
+| Option | Description |
+|---|---|
+| `1` | Statistiques globales |
+| `2` | Liste de tous les utilisateurs (en ligne/hors ligne) |
+| `3` | Broadcast message à tous |
+| `4` | Kick (déconnecter) un utilisateur |
+| `5` | Feedback reçus |
+| `6` | Activer/désactiver le premium |
+| `7` | Envoyer un message à un utilisateur |
+| `8` | Paiements en attente |
+| `9` | Journal d'audit (logs immuables) |
+| `s` | **Surveillance connexions** : IP, pays, heure de chaque connecté |
+| `a` | **Alertes sécurité** : bruteforce, pays incohérent, sessions multiples |
+| `c` | **Voir conversation** : modération légale entre 2 numéros |
+| `f` | **Fichiers uploadés** : liste complète avec taille et date |
+| `g` | **Signalements** : traiter les alertes utilisateurs |
+
+> ⚠️ **Accès réservé** : la lecture des conversations et fichiers est
+> strictement réservée à la modération et aux signalements légaux.
+> Toute consultation est loguée dans l'audit.
+
 ## 🤝 Contribuer au projet
 
 TermChat est open source. Pour proposer une amélioration :
@@ -238,4 +271,3 @@ TermChat est open source. Pour proposer une amélioration :
 avec l'aide d'assistants IA. La conception, les décisions de sécurité,
 et les tests restent de mon ressort — l'IA m'aide à écrire et sécuriser
 le code plus vite.
-
