@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TermChat v6.1 — Client sécurisé
+TermChat v6.3 — Client (surveillance + signalement)
 Messagerie mondiale pour développeurs — by Aboudev Labs 🇨🇮
-Correctifs sécurité : TLS renforcé, clé d'identité chiffrée, limites fichiers, E2E amélioré.
+Correctifs v6.3 : Connexion directe, surveillance admin, signalement, TLS renforcé, E2E.
 """
 
 import socket
@@ -713,9 +713,6 @@ def connecter_par_numero():
     mdp = input("Mot de passe: ").strip()
     envoyer_cli({"action": "connecter_numero", "numero": numero, "mdp": mdp})
     rep = attendre()
-    if rep and rep.get("ok") and rep.get("besoin_2fa"):
-        _demander_code_2fa(rep.get("numero", numero))
-        return
     if rep and rep.get("ok"):
         _finaliser_connexion(rep)
         return
@@ -741,9 +738,6 @@ def connecter_par_email():
     mdp = input("Mot de passe: ").strip()
     envoyer_cli({"action": "connecter_email", "email": email, "mdp": mdp})
     rep = attendre()
-    if rep and rep.get("ok") and rep.get("besoin_2fa"):
-        _demander_code_2fa(rep.get("numero", ""))
-        return
     if rep and rep.get("ok"):
         _finaliser_connexion(rep)
         return
@@ -1080,6 +1074,17 @@ def _ouvrir_chat(nd):
             rep2 = attendre()
             if rep2 and rep2.get("ok"):
                 succes(rep2.get("msg", "Ajouté!"))
+            continue
+
+        if texte.startswith("/signaler"):
+            raison = input(f"{R}🚩 Raison du signalement (harcelement, fraude, menace...): {Z}").strip()
+            if raison:
+                envoyer_cli({"action": "signaler", "numero": nd, "raison": raison, "msg_id": dernier_msg_id or ""})
+                rep2 = attendre()
+                if rep2 and rep2.get("ok"):
+                    succes("Signalement envoyé à l'administration.")
+                else:
+                    erreur(rep2.get("msg", "Erreur") if rep2 else "?")
             continue
 
         envoyer_cli({"action": "typing", "dest": nd, "actif": True})
@@ -1819,6 +1824,110 @@ def panel_admin():
                     succes(rep.get("msg", ""))
                 else:
                     erreur(rep.get("msg", "?") if rep else "?")
+            entree()
+
+        elif choix == "s":
+            envoyer_cli({"action": "admin_surveillance"})
+            rep = attendre(8)
+            titre("🛡️ SURVEILLANCE CONNEXIONS")
+            if rep and rep.get("ok"):
+                conns = rep.get("connexions", [])
+                if not conns:
+                    print(f"  {G}Aucune connexion active.{Z}")
+                else:
+                    print(f"  {B}{len(conns)} utilisateur(s) connecte(s):{Z}")
+                    print()
+                    for c in conns:
+                        st = STATUTS_ICONS.get(c.get("statut","disponible"), "")
+                        print(f"  🟢 {B}{c.get('nom','?')}{Z} {G}{c.get('numero','')}{Z}")
+                        print(f"     IP: {J}{c.get('ip','?')}{Z}  Pays: {c.get('pays','?')}  Connecte: {c.get('heure_connexion','')}")
+                        print(f"     {st}")
+                        print()
+            else:
+                erreur("Erreur.")
+            entree()
+
+        elif choix == "a":
+            envoyer_cli({"action": "admin_alertes_securite"})
+            rep = attendre(10)
+            titre("🚨 ALERTES SECURITE")
+            if rep and rep.get("ok"):
+                alerts = rep.get("alertes", [])
+                if not alerts:
+                    print(f"  {G}Aucune alerte recente.{Z}")
+                else:
+                    for a in alerts:
+                        sev_color = R if a.get("severite") == "CRITIQUE" else J if a.get("severite") == "MOYEN" else G
+                        print(f"  {sev_color}[{a.get('severite','?')}]{Z} {G}{a.get('heure','?')}{Z}")
+                        print(f"     Type: {a.get('type','?')}  IP: {J}{a.get('ip','?')}{Z}")
+                        print(f"     {a.get('details','')}")
+                        print()
+            else:
+                erreur("Erreur.")
+            entree()
+
+        elif choix == "c":
+            n1 = input("Numero 1: ").strip()
+            n2 = input("Numero 2: ").strip()
+            envoyer_cli({"action": "admin_voir_conversation", "numero1": n1, "numero2": n2})
+            rep = attendre(10)
+            titre("💬 CONVERSATION (MODERATION)")
+            if rep and rep.get("ok"):
+                print(f"  {R}⚠️ Accès reserve — donnees sensibles{Z}")
+                entre_txt = rep.get('entre','')
+                print(f"  Entre: {entre_txt}")
+                print()
+                for m in rep.get("historique", []):
+                    dt = m.get("heure", "")[:16].replace("T", " ")
+                    nom = m.get("nom_de", "?")
+                    texte = m.get("texte", "")
+                    chiffre = " 🔐" if m.get("chiffre") else ""
+                    print(f"  {G}{dt}{Z} [{nom}]: {texte}{chiffre}")
+            else:
+                erreur(rep.get("msg", "Erreur") if rep else "?")
+            entree()
+
+        elif choix == "f":
+            envoyer_cli({"action": "admin_voir_fichiers"})
+            rep = attendre(8)
+            titre("📎 FICHIERS UPLOADES")
+            if rep and rep.get("ok"):
+                fichiers = rep.get("fichiers", [])
+                if not fichiers:
+                    print(f"  {G}Aucun fichier recent.{Z}")
+                else:
+                    for f in fichiers:
+                        taille = f"{f.get('taille',0)//1024} Ko" if f.get('taille',0) < 1024*1024 else f"{f.get('taille',0)//1024//1024} Mo"
+                        print(f"  📎 {f.get('nom','?')}  {G}{taille}{Z}  {f.get('date','')}")
+            else:
+                erreur("Erreur.")
+            entree()
+
+        elif choix == "g":
+            envoyer_cli({"action": "admin_signalements"})
+            rep = attendre(10)
+            titre("🚩 SIGNALEMENTS UTILISATEURS")
+            if rep and rep.get("ok"):
+                sigs = rep.get("signalements", [])
+                if not sigs:
+                    print(f"  {G}Aucun signalement en attente.{Z}")
+                else:
+                    for s in sigs:
+                        print(f"  {R}🚩{Z} {B}{s.get('signaleur','?')}{Z} signale {R}{s.get('cible','?')}{Z}")
+                        print(f"     Raison: {s.get('raison','')}")
+                        print(f"     {G}{s.get('heure','')}{Z}  IP: {s.get('ip','?')}")
+                        print()
+                    sid = input("ID a traiter (vide pour passer): ").strip()
+                    if sid:
+                        dec = input("Decision (archive/kick): ").strip()
+                        envoyer_cli({"action": "admin_traiter_signalement", "id": sid, "decision": dec})
+                        rep2 = attendre()
+                        if rep2 and rep2.get("ok"):
+                            succes(rep2.get("msg"))
+                        else:
+                            erreur(rep2.get("msg","?") if rep2 else "?")
+            else:
+                erreur("Erreur.")
             entree()
 
         elif choix == "r":

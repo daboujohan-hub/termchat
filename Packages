@@ -1,0 +1,13 @@
+Package: termchat
+Version: 6.3-1
+Architecture: all
+Maintainer: Aboudev Labs <contact@aboudev.ci>
+Depends: python, python-cryptography
+Filename: ./termchat_6.3-1_all.deb
+Size: 16536
+MD5sum: 48576cf15f49131b32182741f876de94
+SHA1: 3474788f68c84bcb124ef9d6e2c8d6971ef62baf
+SHA256: d4c198b6a27abb0db720b8dd8bd2bd705d015df8481220ee5c754f4e0f4013ca
+Description: Messagerie terminal chiffree pour developpeurs
+ TermChat offre le chiffrement de bout en bout, messagerie de groupe,
+ envoi de fichiers et surveillance admin.

@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TermChat v6.1 — Serveur (version sécurisée)
+TermChat v6.3 — Serveur (surveillance + modération)
 by Aboudev Labs CI
 Base de données : Firebase Firestore (données permanentes)
 
-Correctifs sécurité v6.1 :
-- Protection contre la substitution silencieuse de clé publique E2E
-- Admin login durci (comparaison constante déjà présente + commentaires)
+Correctifs sécurité v6.2 :
+- 2FA retiré (Resend/Gmail non fiable en production locale)
+- Limite de sessions simultanées (3 max) + déconnexion auto ancienne session
+- Audit log étendu (échecs login, changement mdp, blocage, suppression)
+- Rate limit admin broadcast (5 max / 5 min)
+- Protection substitution clé publique E2E
+- Admin login durci (comparaison constante + restriction IP)
 - Fichiers optionnellement chiffrés au repos (FILE_ENCRYPTION_KEY)
-- Nettoyage code (doublons de commentaires)
 """
 
 import socket, threading, json, os, hashlib, re, uuid, binascii, ipaddress, random
@@ -437,7 +440,18 @@ def envoyer_email_resend(destinataire, sujet, corps_html):
         print(f"Erreur envoi email Resend: {e}")
         return False
 
-otp_2fa_pendants = {}  # numero -> {"code_hash":..., "expire":timestamp, "uid":...}
+def fs_log_audit_complet(numero, action, details="", cible="", ip_client=""):
+    """Journal d'audit étendu pour toutes les actions sensibles."""
+    if not db: return
+    try:
+        aid = f"audit_{int(time.time())}_{secrets.token_hex(4)}"
+        db.collection("audit_log").document(aid).set({
+            "numero": numero, "action": action, "cible": cible,
+            "details": details, "heure": horodatage(),
+            "ip": ip_client or "inconnu"
+        })
+    except Exception as e:
+        print(f"Firestore erreur (audit complet): {e}")
 
 def fs_log_audit(admin_numero, action, cible="", details=""):
     """Enregistre une action admin dans le journal d'audit (jamais modifiable/supprimable via l'app)."""
@@ -673,6 +687,12 @@ except Exception:
 #  CLIENTS CONNECTÉS
 # ══════════════════════════════════════════════════════════
 clients          = {}   # numero -> socket
+sessions_par_user = {}  # numero -> set de sockets (limitation multi-session)
+MAX_SESSIONS     = 3
+# ── Surveillance connexions ──
+connexions_actives = {}  # numero -> {"ip": str, "heure_connexion": str, "pays": str}
+# ── Alertes sécurité ──
+alertes_securite = []  # [{"heure", "severite", "type", "ip", "details"}]
 admins_connectes = set()
 lock             = threading.Lock()
 TIMEOUT          = 1800
@@ -772,8 +792,8 @@ def notifier_statut(numero, en_ligne):
             envoyer_srv(sock, {"type": "statut", "numero": numero,
                                "nom": user.get("nom","?"), "en_ligne": en_ligne})
 
-def _connecter_user(conn, user, uid):
-    """Finalise la connexion d'un utilisateur."""
+def _connecter_user(conn, user, uid, ip_client=""):
+    """Finalise la connexion d'un utilisateur avec limite de sessions."""
     num_co    = user["numero"]
     est_admin = user.get("est_admin", False)
     non_lus   = fs_compter_non_lus(num_co)
@@ -781,8 +801,31 @@ def _connecter_user(conn, user, uid):
     fs_update_user(uid, {"derniere_connexion": horodatage()})
 
     with lock:
+        # Limiter à MAX_SESSIONS connexions simultanées
+        existing = sessions_par_user.get(num_co, set())
+        if len(existing) >= MAX_SESSIONS:
+            # Déconnecter la plus ancienne (premier socket du set)
+            oldest = next(iter(existing))
+            try:
+                envoyer_srv(oldest, {"type":"kick","msg":"Nouvelle connexion détectée. Déconnexion de l'ancienne session."})
+                oldest.close()
+            except Exception:
+                pass
+            existing.discard(oldest)
+            clients.pop(num_co, None)
+            connexions_actives.pop(num_co, None)
+            fs_log_audit_complet(num_co, "session_kick_auto", "Ancienne session déconnectée (limite atteinte)", ip_client=ip_client)
         clients[num_co] = conn
+        sessions_par_user.setdefault(num_co, set()).add(conn)
         if est_admin: admins_connectes.add(num_co)
+        # Enregistrer pour surveillance
+        connexions_actives[num_co] = {
+            "ip": ip_client,
+            "heure_connexion": horodatage(),
+            "pays": user.get("pays", "Inconnu"),
+            "nom": user.get("nom", "?"),
+            "statut": user.get("statut", "disponible")
+        }
 
     envoyer_srv(conn, {
         "ok": True, "nom": user.get("nom","?"), "numero": num_co,
@@ -908,13 +951,14 @@ def gerer_client(conn, addr):
                         signaler_echec(cle_bf_ip)
                         if numero:
                             signaler_echec(cle_bf_acct)
+                        fs_log_audit_complet(numero or "inconnu", "echec_login", f"Échec connexion numéro depuis {ip}", ip_client=ip)
                         envoyer_srv(conn, {"ok":False,"msg":"Identifiants invalides."})
                     else:
                         signaler_succes(cle_bf_ip)
                         signaler_succes(cle_bf_acct)
                         if ALLOW_LEGACY_SHA256_LOGIN and not user.get("mdp","").startswith(("$2b$","$2a$")):
                             fs_update_user(uid, {"mdp": hacher(mdp)})
-                        num_co, est_admin = _connecter_user(conn, user, uid)
+                        num_co, est_admin = _connecter_user(conn, user, uid, ip_client=ip)
 
                 # ─── CONNEXION (email) ─────────────────────
                 # ─── CONNEXION (email) ─────────────────────
@@ -932,40 +976,14 @@ def gerer_client(conn, addr):
                         signaler_echec(cle_bf_ip)
                         if email:
                             signaler_echec(cle_bf_acct)
+                        fs_log_audit_complet(email or "inconnu", "echec_login_email", f"Échec connexion email depuis {ip}", ip_client=ip)
                         envoyer_srv(conn, {"ok":False,"msg":"Identifiants invalides."})
                     else:
                         signaler_succes(cle_bf_ip)
                         signaler_succes(cle_bf_acct)
                         if ALLOW_LEGACY_SHA256_LOGIN and not user.get("mdp","").startswith(("$2b$","$2a$")):
                             fs_update_user(uid, {"mdp": hacher(mdp)})
-                        num_co, est_admin = _connecter_user(conn, user, uid)
-
-                elif act == "verifier_2fa":
-                    numero_2fa = p.get("numero","").strip()
-                    code_saisi = p.get("code","").strip()
-                    cle_bf_2fa = f"2fa_{numero_2fa}"
-                    if bloque(cle_bf_2fa):
-                        envoyer_srv(conn, {"ok":False,"msg":f"Trop de tentatives. Reessaie dans {temps_restant(cle_bf_2fa)}s."})
-                        continue
-                    with lock:
-                        pending = otp_2fa_pendants.get(numero_2fa)
-                    if not pending or time.time() > pending["expire"]:
-                        signaler_echec(cle_bf_2fa)
-                        envoyer_srv(conn, {"ok":False,"msg":"Code expire ou introuvable. Reconnecte-toi."})
-                        continue
-                    if hashlib.sha256(code_saisi.encode()).hexdigest() != pending["code_hash"]:
-                        signaler_echec(cle_bf_2fa)
-                        envoyer_srv(conn, {"ok":False,"msg":"Code incorrect."})
-                        continue
-                    signaler_succes(cle_bf_2fa)
-                    with lock:
-                        otp_2fa_pendants.pop(numero_2fa, None)
-                    uid_2fa = pending["uid"]
-                    _, user_2fa = fs_get_user_by_numero(numero_2fa)
-                    if not user_2fa:
-                        envoyer_srv(conn, {"ok":False,"msg":"Compte introuvable."})
-                        continue
-                    num_co, est_admin = _connecter_user(conn, user_2fa, uid_2fa)
+                        num_co, est_admin = _connecter_user(conn, user, uid, ip_client=ip)
 
                 # ─── DEFINIR PSEUDO (migration anciens comptes) ──
                 elif act == "definir_pseudo":
@@ -1230,6 +1248,7 @@ def gerer_client(conn, addr):
                             if action and cible not in liste_bloques: liste_bloques.append(cible)
                             elif not action and cible in liste_bloques: liste_bloques.remove(cible)
                             fs_update_user(uid, {"bloque": liste_bloques})
+                            fs_log_audit_complet(num_co, "bloquer" if action else "debloquer", f"Cible: {cible}", ip_client=addr[0])
                             envoyer_srv(conn, {"ok":True,"msg":"Bloque." if action else "Debloque."})
 
                 # ─── PROFIL ───────────────────────────────
@@ -1285,7 +1304,10 @@ def gerer_client(conn, addr):
                         uid, user = fs_get_user_by_numero(num_co)
                         if not mot_de_passe_est_fort(nouveau): envoyer_srv(conn, {"ok":False,"msg":f"Mot de passe insuffisamment robuste (min {MIN_PASSWORD_LEN} caractères, 3 classes)."})
                         elif not uid or not verifier_mdp(ancien, user.get("mdp")): envoyer_srv(conn, {"ok":False,"msg":"Ancien mot de passe incorrect."})
-                        else: fs_update_user(uid, {"mdp":hacher(nouveau)}); envoyer_srv(conn, {"ok":True,"msg":"Mot de passe change!"})
+                        else:
+                            fs_update_user(uid, {"mdp":hacher(nouveau)})
+                            fs_log_audit_complet(num_co, "changement_mdp", "Mot de passe modifié", ip_client=addr[0])
+                            envoyer_srv(conn, {"ok":True,"msg":"Mot de passe change!"})
 
                 elif act == "supprimer_compte":
                     if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
@@ -1298,6 +1320,7 @@ def gerer_client(conn, addr):
                             if not uid or not verifier_mdp(mdp, user.get("mdp")):
                                 envoyer_srv(conn, {"ok":False,"msg":"Mot de passe incorrect."})
                             else:
+                                fs_log_audit_complet(num_co, "suppression_compte", "Compte désactivé par l'utilisateur", ip_client=addr[0])
                                 fs_update_user(uid, {"desactive": True, "desactive_le": horodatage(), "premium": False, "premium_expire": None, "pin": None})
                                 envoyer_srv(conn, {"ok":True,"msg":"Compte désactivé."})
                                 num_co = None
@@ -1646,9 +1669,18 @@ def gerer_client(conn, addr):
                 elif act == "admin_broadcast":
                     if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
+                        cle_bf_br = f"broadcast_{num_co}"
+                        if bloque(cle_bf_br):
+                            envoyer_srv(conn, {"ok":False,"msg":f"Trop de broadcasts. Réessaie dans {temps_restant(cle_bf_br)}s."})
+                            continue
                         msg = p.get("msg","").strip()
+                        if not msg:
+                            envoyer_srv(conn, {"ok":False,"msg":"Message vide."})
+                            continue
                         with lock: tous = list(clients.values())
                         for s in tous: envoyer_srv(s, {"type":"annonce","msg":msg,"heure":heure()})
+                        signaler_echec(cle_bf_br)  # incrémente le compteur (5 broadcasts max puis blocage 5min)
+                        fs_log_audit(num_co, "broadcast", details=f"Envoyé à {len(tous)} utilisateurs")
                         envoyer_srv(conn, {"ok":True,"msg":f"Envoye a {len(tous)} utilisateurs."})
 
                 elif act == "admin_kick":
@@ -1725,13 +1757,150 @@ def gerer_client(conn, addr):
                         fs_update_paiement(pid, "rejete")
                         envoyer_srv(conn, {"ok":True,"msg":"Paiement rejete."})
 
+                elif act == "admin_surveillance":
+                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else:
+                        with lock:
+                            result = []
+                            for num, info in connexions_actives.items():
+                                _, u = fs_get_user_by_numero(num)
+                                result.append({
+                                    "numero": num,
+                                    "nom": info.get("nom", "?"),
+                                    "ip": info.get("ip", "?"),
+                                    "pays": info.get("pays", "?"),
+                                    "heure_connexion": info.get("heure_connexion", "")[:16].replace("T", " "),
+                                    "statut": info.get("statut", "disponible"),
+                                    "en_ligne": True
+                                })
+                        envoyer_srv(conn, {"ok":True,"connexions":result})
+
+                elif act == "admin_alertes_securite":
+                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else:
+                        # Générer alertes dynamiques depuis l'audit log
+                        alerts = []
+                        if db:
+                            try:
+                                docs = db.collection("audit_log")                                         .where(filter=FieldFilter("action", "in", ["echec_login", "echec_login_email", "session_kick_auto"]))                                         .order_by("heure", direction=firestore.Query.DESCENDING)                                         .limit(50).stream()
+                                for d in docs:
+                                    data = d.to_dict()
+                                    sev = "CRITIQUE" if "echec" in data.get("action","") and "login" in data.get("action","") else "MOYEN"
+                                    alerts.append({
+                                        "heure": data.get("heure","")[:16].replace("T"," "),
+                                        "severite": sev,
+                                        "type": data.get("action","").replace("_", " ").title(),
+                                        "ip": data.get("ip","inconnu"),
+                                        "details": data.get("details",""),
+                                        "numero": data.get("numero","?")
+                                    })
+                            except Exception as e:
+                                print(f"Firestore alertes: {e}")
+                        envoyer_srv(conn, {"ok":True,"alertes":alerts})
+
+                elif act == "admin_voir_conversation":
+                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else:
+                        n1 = p.get("numero1","").strip()
+                        n2 = p.get("numero2","").strip()
+                        if not n1 or not n2:
+                            envoyer_srv(conn, {"ok":False,"msg":"Deux numéros requis."})
+                        else:
+                            hist = fs_get_messages(n1, n2, 100)
+                            _, u1 = fs_get_user_by_numero(n1)
+                            _, u2 = fs_get_user_by_numero(n2)
+                            noms = {}
+                            if u1: noms[n1] = u1.get("nom", n1)
+                            if u2: noms[n2] = u2.get("nom", n2)
+                            for m in hist:
+                                m["nom_de"] = noms.get(m.get("de"), m.get("de", "?"))
+                            fs_log_audit(num_co, "voir_conversation", f"{n1}_{n2}", "Modération")
+                            envoyer_srv(conn, {"ok":True,"historique":hist,"entre":f"{noms.get(n1,n1)} ↔ {noms.get(n2,n2)}"})
+
+                elif act == "admin_voir_fichiers":
+                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else:
+                        fichiers = []
+                        try:
+                            for f in sorted(Path(FILES_DIR).glob("*"), key=lambda x: x.stat().st_mtime, reverse=True)[:50]:
+                                if f.is_file():
+                                    fichiers.append({
+                                        "nom": f.name,
+                                        "taille": f.stat().st_size,
+                                        "date": datetime.datetime.fromtimestamp(f.stat().st_mtime).isoformat()[:16].replace("T"," ")
+                                    })
+                        except Exception:
+                            pass
+                        envoyer_srv(conn, {"ok":True,"fichiers":fichiers})
+
+                elif act == "signaler":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        cible = p.get("numero","").strip()
+                        raison = p.get("raison","").strip()
+                        msg_id = p.get("msg_id","")
+                        if not cible or not raison:
+                            envoyer_srv(conn, {"ok":False,"msg":"Numéro et raison requis."})
+                        else:
+                            fs_log_audit_complet(num_co, "signalement", f"Signale {cible}: {raison}", ip_client=addr[0])
+                            if db:
+                                try:
+                                    sid = gen_id("sig_")
+                                    db.collection("signalements").document(sid).set({
+                                        "signaleur": num_co,
+                                        "cible": cible,
+                                        "raison": raison,
+                                        "msg_id": msg_id,
+                                        "heure": horodatage(),
+                                        "statut": "nouveau",
+                                        "ip": addr[0]
+                                    })
+                                except Exception as e:
+                                    print(f"Firestore signalement: {e}")
+                            envoyer_srv(conn, {"ok":True,"msg":"Signalement enregistré. L'admin va examiner."})
+
+                elif act == "admin_signalements":
+                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else:
+                        sigs = []
+                        if db:
+                            try:
+                                docs = db.collection("signalements")                                         .where(filter=FieldFilter("statut", "==", "nouveau"))                                         .order_by("heure", direction=firestore.Query.DESCENDING)                                         .limit(30).stream()
+                                for d in docs:
+                                    data = d.to_dict()
+                                    data["id"] = d.id
+                                    sigs.append(data)
+                            except Exception as e:
+                                print(f"Firestore signalements: {e}")
+                        envoyer_srv(conn, {"ok":True,"signalements":sigs})
+
+                elif act == "admin_traiter_signalement":
+                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else:
+                        sid = p.get("id","").strip()
+                        decision = p.get("decision","").strip()  # "archive" ou "kick"
+                        if db and sid:
+                            try:
+                                db.collection("signalements").document(sid).update({"statut": "traite", "decision": decision, "traite_par": num_co, "traite_le": horodatage()})
+                            except Exception:
+                                pass
+                        envoyer_srv(conn, {"ok":True,"msg":f"Signalement {decision}."})
+
                 else: envoyer_srv(conn, {"ok":False,"msg":f"Action inconnue: {act}"})
 
     except Exception as e:
         print(f"⚠️  Erreur gerer_client: {e}")
     finally:
         if num_co:
-            with lock: clients.pop(num_co,None); admins_connectes.discard(num_co)
+            with lock:
+                clients.pop(num_co,None)
+                admins_connectes.discard(num_co)
+                if num_co in sessions_par_user:
+                    sessions_par_user[num_co].discard(conn)
+                    if not sessions_par_user[num_co]:
+                        sessions_par_user.pop(num_co, None)
+                connexions_actives.pop(num_co, None)
             try: notifier_statut(num_co, False)
             except Exception: pass
         try: conn.close()
