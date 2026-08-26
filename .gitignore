@@ -1,4 +1,52 @@
+# ══════════════════════════════════════════════════════════
+#  TermChat v6.3 — .gitignore
+#  by Aboudev Labs 🇨🇮
+# ══════════════════════════════════════════════════════════
+
+# ── Secrets & Credentials ──
 firebase-credentials.json
+*.env
+.env
+.env.local
+.env.production
+ADMIN_CODE
+secrets/
+
+# ── Cache Python ──
 __pycache__/
-cert.pem
-key.pem
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# ── Paquets / Build ──
+*.deb
+pkgbuild/
+*.rpm
+*.tar.gz
+*.zip
+
+# ── Fichiers locaux temporaires ──
+*.log
+termchat_downloads/
+.termchat_files/
+.termchat_tls/known_hosts.json
+
+# ── IDE / Éditeurs ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Système ──
+.DS_Store
+Thumbs.db
+
+# ── Tests / Données locales ──
+test_data/
+*.db
+*.sqlite
