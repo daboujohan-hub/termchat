@@ -1928,7 +1928,7 @@ def gerer_client_tls(conn, addr, ctx):
 
 def main():
     print("╔══════════════════════════════════════════╗")
-    print("║  💬  TERMCHAT v6.1 — SERVEUR (sécurisé)  ║")
+    print("║  💬  TERMCHAT v6.3 — SERVEUR (sécurisé)  ║")
     print("║  by Aboudev Labs 🇨🇮                     ║")
     print("╚══════════════════════════════════════════╝")
     print(f"🔒 Bind: {BIND_HOST}:{PORT} | TLS requis: {REQUIRE_TLS} | Production: {PRODUCTION_MODE}")

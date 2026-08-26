@@ -350,7 +350,7 @@ def banniere():
         print(f"""{C2}{B}
  ╔══════════════════════════════════════════════╗
  ║                                              ║
- ║   💬   T E R M C H A T   v6.1              ║
+ ║   💬   T E R M C H A T   v6.3              ║
  ║   Messagerie Mondiale pour Développeurs      ║
  ║   by Aboudev Labs 🇨🇮  · Sécurisé           ║
  ║                                              ║
@@ -1954,8 +1954,8 @@ def main():
 
     banniere()
 
-    host = sys.argv[1] if len(sys.argv) >= 2 else "tokaido.proxy.rlwy.net"
-    port = int(sys.argv[2]) if len(sys.argv) >= 3 else 12136
+    host = sys.argv[1] if len(sys.argv) >= 2 else "altaria.proxy.rlwy.net"
+    port = int(sys.argv[2]) if len(sys.argv) >= 3 else 20022
 
     print(f"{G}🔌 Connexion à {host}:{port}...{Z}")
 
