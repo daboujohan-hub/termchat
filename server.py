@@ -1199,6 +1199,29 @@ def gerer_client(conn, addr):
                                     "msg":"TOTP active ! Notez ces codes de recuperation (usage unique, affiches une seule fois).",
                                     "codes_recuperation": codes_recup})
 
+                # ─── TOTP: DESACTIVER ──────────────────────
+                elif act == "totp_desactiver":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        mdp = p.get("mdp","").strip()
+                        code = p.get("code","").strip()
+                        uid, user = fs_get_user_by_numero(num_co)
+                        if not uid or not verifier_mdp(mdp, user.get("mdp")):
+                            fs_log_audit_complet(num_co, "totp_desactiver_echec", "Mot de passe invalide pour desactivation TOTP", ip_client=addr[0])
+                            envoyer_srv(conn, {"ok":False,"msg":"Mot de passe incorrect."})
+                        elif not user.get("totp_actif"):
+                            envoyer_srv(conn, {"ok":False,"msg":"TOTP n'est pas active sur ce compte."})
+                        else:
+                            secret = totp_dechiffrer_secret(user.get("totp_secret"))
+                            if not totp_verifier_code(secret, code):
+                                fs_log_audit_complet(num_co, "totp_desactiver_echec", "Code TOTP invalide pour desactivation", ip_client=addr[0])
+                                envoyer_srv(conn, {"ok":False,"msg":"Code TOTP incorrect."})
+                            else:
+                                fs_update_user(uid, {"totp_actif": False, "totp_secret": None, "totp_recovery_codes": []})
+                                fs_log_audit_complet(num_co, "totp_desactive", "TOTP desactive par l'utilisateur", ip_client=addr[0])
+                                envoyer_srv(conn, {"ok":True,"msg":"TOTP desactive."})
+
                 # ─── DÉCONNEXION ──────────────────────────
                 elif act == "deconnecter":
                     break
