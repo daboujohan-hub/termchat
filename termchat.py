@@ -713,6 +713,9 @@ def connecter_par_numero():
     mdp = input("Mot de passe: ").strip()
     envoyer_cli({"action": "connecter_numero", "numero": numero, "mdp": mdp})
     rep = attendre()
+    if rep and rep.get("ok") and rep.get("totp_requis"):
+        _demander_code_totp()
+        return
     if rep and rep.get("ok"):
         _finaliser_connexion(rep)
         return
@@ -720,15 +723,19 @@ def connecter_par_numero():
     entree()
 
 
-def _demander_code_2fa(numero):
-    print(f"\n{J}📧 Un code de verification a ete envoye par email.{Z}")
-    code = input("Code (6 chiffres): ").strip()
-    envoyer_cli({"action": "verifier_2fa", "numero": numero, "code": code})
-    rep2 = attendre()
-    if rep2 and rep2.get("ok"):
-        _finaliser_connexion(rep2)
-        return
-    erreur(rep2.get("msg", "Erreur") if rep2 else "Pas de réponse.")
+def _demander_code_totp():
+    print(f"\n{J}🔐 Authentification a deux facteurs requise.{Z}")
+    tentatives = 0
+    while tentatives < 3:
+        code = input("Code TOTP (ou code de recuperation): ").strip()
+        envoyer_cli({"action": "totp_verifier_connexion", "code": code})
+        rep2 = attendre()
+        if rep2 and rep2.get("ok"):
+            _finaliser_connexion(rep2)
+            return
+        erreur(rep2.get("msg", "Erreur") if rep2 else "Pas de réponse.")
+        tentatives += 1
+    erreur("Trop de tentatives.")
     entree()
 
 
@@ -738,6 +745,9 @@ def connecter_par_email():
     mdp = input("Mot de passe: ").strip()
     envoyer_cli({"action": "connecter_email", "email": email, "mdp": mdp})
     rep = attendre()
+    if rep and rep.get("ok") and rep.get("totp_requis"):
+        _demander_code_totp()
+        return
     if rep and rep.get("ok"):
         _finaliser_connexion(rep)
         return
@@ -1449,6 +1459,7 @@ def menu_securite():
         print(f"  {C2}5{Z} — 🗑️   Supprimer mon compte")
         print(f"  {C2}6{Z} — ⭐  Mon abonnement")
         print(f"  {C2}7{Z} — 🔓  Oublier ce serveur (reinitialiser la confiance TLS)")
+        print(f"  {C2}8{Z} — 🔐  Authentification a deux facteurs (TOTP)")
         print(f"  {C2}r{Z} — 🔙  Retour\n")
         choix = input(f"{J}Choix: {Z}").strip().lower()
 
@@ -1530,6 +1541,44 @@ def menu_securite():
                 rep = attendre()
                 if rep and rep.get("ok"):
                     session["a_pin"] = False
+                    succes(rep.get("msg"))
+                else:
+                    erreur(rep.get("msg", "?") if rep else "?")
+            entree()
+
+        elif choix == "8":
+            print("  1 — Activer TOTP  |  2 — Desactiver TOTP")
+            c2 = input("Choix: ").strip()
+            if c2 == "1":
+                envoyer_cli({"action": "totp_setup_demarrer"})
+                rep = attendre()
+                if not (rep and rep.get("ok")):
+                    erreur(rep.get("msg", "?") if rep else "?")
+                    entree()
+                    continue
+                secret = rep.get("secret", "")
+                print(f"\n{J}🔐 Entre ce secret dans Google Authenticator (ou une app TOTP):{Z}")
+                print(f"\n   {B}{secret}{Z}\n")
+                print(f"{G}Une fois ajoute, l'app affichera un code a 6 chiffres.{Z}")
+                code_confirm = input("Code de confirmation: ").strip()
+                envoyer_cli({"action": "totp_setup_confirmer", "code": code_confirm})
+                rep2 = attendre()
+                if rep2 and rep2.get("ok"):
+                    succes(rep2.get("msg", "TOTP active."))
+                    codes_recup = rep2.get("codes_recuperation", [])
+                    if codes_recup:
+                        print(f"\n{R}{B}⚠️  NOTE CES CODES DE RECUPERATION MAINTENANT (usage unique, affiches une seule fois):{Z}\n")
+                        for c in codes_recup:
+                            print(f"   {B}{c}{Z}")
+                        print()
+                else:
+                    erreur(rep2.get("msg", "?") if rep2 else "?")
+            elif c2 == "2":
+                mdp = input("Mot de passe: ").strip()
+                code_totp = input("Code TOTP actuel: ").strip()
+                envoyer_cli({"action": "totp_desactiver", "mdp": mdp, "code": code_totp})
+                rep = attendre()
+                if rep and rep.get("ok"):
                     succes(rep.get("msg"))
                 else:
                     erreur(rep.get("msg", "?") if rep else "?")
