@@ -481,6 +481,28 @@ def fs_save_feedback(numero, nom, texte, prioritaire=False):
         })
     except Exception as e: print(f"Firestore erreur: {e}")
 
+TARIFS_PREMIUM = {"500": "mensuel", "8000": "annuel", "200": "fondateur"}
+
+def fs_verifier_paiement_sms(code_transaction, montant):
+    """Cherche un paiement confirme automatiquement par SMS (collection
+    paiements_confirmes_sms, alimentee par surveiller_paiements_sms.py).
+    Retourne le type d'abonnement si trouve, valide et non deja utilise, sinon None."""
+    if not db: return None
+    try:
+        doc_ref = db.collection("paiements_confirmes_sms").document(code_transaction)
+        doc = doc_ref.get()
+        if not doc.exists: return None
+        data = doc.to_dict()
+        if data.get("statut") != "non_utilise": return None
+        montant_recu = str(data.get("montant", ""))
+        type_abo = TARIFS_PREMIUM.get(montant_recu)
+        if not type_abo: return None
+        if str(montant).strip() != montant_recu: return None
+        doc_ref.update({"statut": "utilise", "utilise_le": horodatage()})
+        return type_abo
+    except Exception as e:
+        print(f"Firestore erreur verif paiement SMS: {e}"); return None
+
 def fs_save_paiement_attente(numero, nom, code_transaction, montant):
     if not db: return None
     try:
@@ -1615,6 +1637,19 @@ def gerer_client(conn, addr):
                             with lock: dernier_paiement[num_co] = time.time()
                             _, user = fs_get_user_by_numero(num_co)
                             nom = user.get("nom","?") if user else "?"
+                            type_auto = fs_verifier_paiement_sms(code_t, montant)
+                            if type_auto:
+                                uid_auto, _ = fs_get_user_by_numero(num_co)
+                                if type_auto == "fondateur":
+                                    expire_auto = None
+                                else:
+                                    jours_auto = 365 if type_auto == "annuel" else 30
+                                    expire_auto = (datetime.datetime.now() + datetime.timedelta(days=jours_auto)).isoformat()
+                                fs_update_user(uid_auto, {"premium":True,"premium_expire":expire_auto,
+                                    "premium_type":type_auto,"active_par":"auto_sms"})
+                                fs_log_audit("auto_sms", "activer_premium_auto", num_co, type_auto)
+                                envoyer_srv(conn, {"ok":True,"msg":f"Paiement confirme automatiquement! Premium ({type_auto}) active."})
+                                continue
                             pid = fs_save_paiement_attente(num_co, nom, code_t, montant)
                             if pid:
                                 envoyer_srv(conn, {"ok":True,"msg":"Paiement soumis! L'admin va verifier et activer ton premium sous peu."})

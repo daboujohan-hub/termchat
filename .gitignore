@@ -50,3 +50,11 @@ Thumbs.db
 test_data/
 *.db
 *.sqlite
+
+# ── Etat local surveillance paiements ──
+dernier_sms_traite.json
+paiements.log
+
+# ── Etat local surveillance paiements ──
+dernier_sms_traite.json
+paiements.log
