@@ -794,14 +794,48 @@ connexions_count = 0
 connexions_lock = threading.Lock()
 MAX_TAILLE_BUFFER = MAX_BUFFER_BYTES
 
-# ── Anti-bruteforce ──────────────────────────────────────────
-tentatives_echec = {}   # cle (ex: "login_ip") -> [nb_echecs, timestamp_dernier_echec]
+# ── Anti-bruteforce (persistant via Firestore) ───────────────
+tentatives_echec = {}   # cache local: cle -> [nb_echecs, timestamp_dernier_echec]
 MAX_TENTATIVES   = 5
 BLOCAGE_SECONDES = 300  # 5 minutes
+
+def _fs_cle_bruteforce(cle):
+    # Firestore n'aime pas les "/" dans les IDs de document
+    return cle.replace("/", "_")
+
+def _fs_charger_bruteforce(cle):
+    """Charge l'etat depuis Firestore si absent du cache local (ex: apres redemarrage)."""
+    if cle in tentatives_echec or not db:
+        return
+    try:
+        doc = db.collection("rate_limits_bruteforce").document(_fs_cle_bruteforce(cle)).get()
+        if doc.exists:
+            d = doc.to_dict()
+            tentatives_echec[cle] = [d.get("nb", 0), d.get("t", 0)]
+    except Exception as e:
+        print(f"Firestore erreur (bruteforce load): {e}")
+
+def _fs_sauver_bruteforce(cle):
+    if not db:
+        return
+    try:
+        nb, t = tentatives_echec.get(cle, [0, 0])
+        db.collection("rate_limits_bruteforce").document(_fs_cle_bruteforce(cle)).set({"nb": nb, "t": t})
+    except Exception as e:
+        print(f"Firestore erreur (bruteforce save): {e}")
+
+def _fs_effacer_bruteforce(cle):
+    if not db:
+        return
+    try:
+        db.collection("rate_limits_bruteforce").document(_fs_cle_bruteforce(cle)).delete()
+    except Exception as e:
+        print(f"Firestore erreur (bruteforce delete): {e}")
 
 def bloque(cle):
     """True si cette cle a depasse le nombre d'echecs autorises recemment."""
     with lock:
+        _fs_charger_bruteforce(cle)
         nb, t = tentatives_echec.get(cle, [0, 0])
         if nb >= MAX_TENTATIVES and time.time() - t < BLOCAGE_SECONDES:
             return True
@@ -813,10 +847,12 @@ def signaler_echec(cle):
     with lock:
         nb, _ = tentatives_echec.get(cle, [0, 0])
         tentatives_echec[cle] = [nb + 1, time.time()]
+    _fs_sauver_bruteforce(cle)
 
 def signaler_succes(cle):
     with lock:
         tentatives_echec.pop(cle, None)
+    _fs_effacer_bruteforce(cle)
 
 def temps_restant(cle):
     with lock:
