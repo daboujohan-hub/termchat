@@ -48,6 +48,12 @@ ALLOW_ACCOUNT_DELETION = os.environ.get("ALLOW_ACCOUNT_DELETION", "0") == "1"
 MIN_PASSWORD_LEN = int(os.environ.get("MIN_PASSWORD_LEN", "12"))
 MAX_MESSAGE_LEN_FREE = int(os.environ.get("MAX_MESSAGE_LEN_FREE", "150"))
 MAX_MESSAGE_LEN_PREMIUM = int(os.environ.get("MAX_MESSAGE_LEN_PREMIUM", "4000"))
+EXPIRE_SECONDES_MIN = int(os.environ.get("EXPIRE_SECONDES_MIN", "10"))
+EXPIRE_SECONDES_MAX = int(os.environ.get("EXPIRE_SECONDES_MAX", "604800"))  # 7 jours
+MAX_NOM_GROUPE_LEN = int(os.environ.get("MAX_NOM_GROUPE_LEN", "100"))
+MAX_MEMBRES_GROUPE = int(os.environ.get("MAX_MEMBRES_GROUPE", "500"))
+MAX_EPINGLE_LEN = int(os.environ.get("MAX_EPINGLE_LEN", "1000"))
+TYPES_ABONNEMENT_VALIDES = ("mensuel", "annuel", "fondateur")
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(5 * 1024 * 1024)))
 MAX_BUFFER_BYTES = int(os.environ.get("MAX_BUFFER_BYTES", str(MAX_UPLOAD_BYTES * 2 + 1024 * 1024)))
 MAX_FEEDBACK_LEN = int(os.environ.get("MAX_FEEDBACK_LEN", "500"))
@@ -539,6 +545,16 @@ def fs_get_messages(n1, n2, limite=50):
     except Exception as e:
         print(f"Firestore erreur: {e}"); return []
 
+def fs_message_existe(num_co, dest, msg_id):
+    if not db or not msg_id: return False
+    try:
+        cle = "_".join(sorted([num_co, dest]))
+        doc = db.collection("historique").document(cle)\
+                .collection("messages").document(msg_id).get()
+        return doc.exists
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return False
+
 def fs_marquer_lus(dest, exp):
     if not db: return
     try:
@@ -871,9 +887,12 @@ def gerer_client(conn, addr):
                 try: p = json.loads(ligne)
                 except Exception: continue
 
-                act = p.get("action", "")
                 ip_client = addr[0]
-                if not isinstance(p, dict) or not act:
+                if not isinstance(p, dict):
+                    envoyer_srv(conn, {"ok":False,"msg":"Requête invalide."})
+                    continue
+                act = p.get("action", "")
+                if not act:
                     envoyer_srv(conn, {"ok":False,"msg":"Requête invalide."})
                     continue
                 if limite_depassee(f"act_ip:{ip_client}", GLOBAL_ACTIONS_PER_MIN, 60):
@@ -953,6 +972,10 @@ def gerer_client(conn, addr):
                             signaler_echec(cle_bf_acct)
                         fs_log_audit_complet(numero or "inconnu", "echec_login", f"Échec connexion numéro depuis {ip}", ip_client=ip)
                         envoyer_srv(conn, {"ok":False,"msg":"Identifiants invalides."})
+                    elif user.get("desactive"):
+                        signaler_echec(cle_bf_ip)
+                        fs_log_audit_complet(numero, "login_compte_desactive", f"Tentative connexion sur compte desactive depuis {ip}", ip_client=ip)
+                        envoyer_srv(conn, {"ok":False,"msg":"Ce compte a ete desactive."})
                     else:
                         signaler_succes(cle_bf_ip)
                         signaler_succes(cle_bf_acct)
@@ -978,6 +1001,10 @@ def gerer_client(conn, addr):
                             signaler_echec(cle_bf_acct)
                         fs_log_audit_complet(email or "inconnu", "echec_login_email", f"Échec connexion email depuis {ip}", ip_client=ip)
                         envoyer_srv(conn, {"ok":False,"msg":"Identifiants invalides."})
+                    elif user.get("desactive"):
+                        signaler_echec(cle_bf_ip)
+                        fs_log_audit_complet(email, "login_compte_desactive", f"Tentative connexion sur compte desactive depuis {ip}", ip_client=ip)
+                        envoyer_srv(conn, {"ok":False,"msg":"Ce compte a ete desactive."})
                     else:
                         signaler_succes(cle_bf_ip)
                         signaler_succes(cle_bf_acct)
@@ -1117,7 +1144,9 @@ def gerer_client(conn, addr):
                                 }
                                 if expire_s:
                                     try:
-                                        msg["expire_a"] = time.time()+int(expire_s)
+                                        expire_s_int = int(expire_s)
+                                        if EXPIRE_SECONDES_MIN <= expire_s_int <= EXPIRE_SECONDES_MAX:
+                                            msg["expire_a"] = time.time()+expire_s_int
                                     except Exception:
                                         pass
                                 fs_save_message(cle, msg)
@@ -1135,12 +1164,18 @@ def gerer_client(conn, addr):
                 # ─── RÉACTION ─────────────────────────────
                 elif act == "reaction":
                     if num_co:
-                        dest  = p.get("dest","").strip(); msg_id = p.get("msg_id",""); emoji = p.get("emoji","👍")
-                        _, exp_user = fs_get_user_by_numero(num_co)
-                        nom_de = exp_user.get("nom","?") if exp_user else "?"
-                        livrer(dest, {"type":"reaction","de":nom_de,
-                                      "numero":num_co,"msg_id":msg_id,"emoji":emoji,"heure":heure()})
-                        envoyer_srv(conn, {"ok":True})
+                        dest  = p.get("dest","").strip(); msg_id = p.get("msg_id",""); emoji = p.get("emoji","👍")[:8]
+                        _, dest_user = fs_get_user_by_numero(dest)
+                        if not dest_user:
+                            envoyer_srv(conn, {"ok":False,"msg":"Destinataire introuvable."})
+                        elif not fs_message_existe(num_co, dest, msg_id):
+                            envoyer_srv(conn, {"ok":False,"msg":"Message introuvable dans cette conversation."})
+                        else:
+                            _, exp_user = fs_get_user_by_numero(num_co)
+                            nom_de = exp_user.get("nom","?") if exp_user else "?"
+                            livrer(dest, {"type":"reaction","de":nom_de,
+                                          "numero":num_co,"msg_id":msg_id,"emoji":emoji,"heure":heure()})
+                            envoyer_srv(conn, {"ok":True})
 
                 # ─── MARQUER LU ───────────────────────────
                 elif act == "marquer_lu":
@@ -1214,8 +1249,13 @@ def gerer_client(conn, addr):
                     else:
                         cible = p.get("numero","").strip()
                         uid, user = fs_get_user_by_numero(num_co)
+                        cible_uid, _ = fs_get_user_by_numero(cible)
                         if not uid:
                             envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        elif not cible_uid:
+                            envoyer_srv(conn, {"ok":False,"msg":"Ce numero ne correspond a aucun compte."})
+                        elif cible == num_co:
+                            envoyer_srv(conn, {"ok":False,"msg":"Impossible de s'ajouter soi-meme."})
                         else:
                             favoris = user.get("favoris",[])
                             if cible not in favoris: favoris.append(cible)
@@ -1465,7 +1505,7 @@ def gerer_client(conn, addr):
                 # ─── GROUPES ──────────────────────────────
                 elif act == "creer_groupe":
                     if num_co:
-                        nom_g = p.get("nom","").strip()
+                        nom_g = p.get("nom","").strip()[:MAX_NOM_GROUPE_LEN]
                         if nom_g:
                             _, eu = fs_get_user_by_numero(num_co)
                             gid  = gen_id("grp_")
@@ -1490,6 +1530,9 @@ def gerer_client(conn, addr):
                             if not est_premium_actif(createur_user) and len(membres_actuels) >= 5:
                                 envoyer_srv(conn, {"ok":False,"msg":"Limite de 5 membres atteinte. Passe premium pour un groupe illimite."})
                                 continue
+                            if len(membres_actuels) >= MAX_MEMBRES_GROUPE:
+                                envoyer_srv(conn, {"ok":False,"msg":f"Limite maximale de {MAX_MEMBRES_GROUPE} membres atteinte."})
+                                continue
                             membres = membres_actuels+[cible]
                             if db: db.collection("groupes").document(gid).update({"membres":membres})
                             livrer(cible, {"type":"invitation_groupe","groupe":groupe.get("nom","?"),"id_groupe":gid,"heure":heure()})
@@ -1499,7 +1542,9 @@ def gerer_client(conn, addr):
                     if not num_co:
                         envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
                     else:
-                        gid=p.get("id_groupe","").strip(); texte=p.get("texte","").strip(); reply=p.get("reply_to")
+                        gid=p.get("id_groupe","").strip(); texte=p.get("texte","").strip()
+                        reply_raw = p.get("reply_to")
+                        reply = str(reply_raw)[:64] if reply_raw else None
                         groupe = fs_get_groupe(gid)
                         _, eu = fs_get_user_by_numero(num_co)
                         if groupe and num_co in groupe.get("membres",[]) and texte and len(texte) > MAX_MESSAGE_LEN_PREMIUM:
@@ -1528,7 +1573,7 @@ def gerer_client(conn, addr):
                     if not num_co:
                         envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
                     else:
-                        gid=p.get("id_groupe","").strip(); texte=p.get("texte","").strip()
+                        gid=p.get("id_groupe","").strip(); texte=p.get("texte","").strip()[:MAX_EPINGLE_LEN]
                         groupe = fs_get_groupe(gid)
                         if not groupe: envoyer_srv(conn, {"ok":False,"msg":"Groupe introuvable."})
                         elif groupe["createur"]!=num_co: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
@@ -1577,6 +1622,8 @@ def gerer_client(conn, addr):
                         type_abo = p.get("type","mensuel")  # "mensuel", "annuel" ou "fondateur"
                         uid, user = fs_get_user_by_numero(cible)
                         if not uid: envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        elif type_abo not in TYPES_ABONNEMENT_VALIDES:
+                            envoyer_srv(conn, {"ok":False,"msg":f"Type d'abonnement invalide. Valeurs autorisees: {', '.join(TYPES_ABONNEMENT_VALIDES)}."})
                         else:
                             fs_log_audit(num_co, "activer_premium", cible, type_abo)
                             if type_abo == "fondateur":
@@ -1738,6 +1785,8 @@ def gerer_client(conn, addr):
                         uid, user = fs_get_user_by_numero(cible)
                         if not uid:
                             envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        elif type_abo not in TYPES_ABONNEMENT_VALIDES:
+                            envoyer_srv(conn, {"ok":False,"msg":f"Type d'abonnement invalide. Valeurs autorisees: {', '.join(TYPES_ABONNEMENT_VALIDES)}."})
                         else:
                             if type_abo == "fondateur":
                                 expire = None
@@ -1928,7 +1977,7 @@ def gerer_client_tls(conn, addr, ctx):
 
 def main():
     print("╔══════════════════════════════════════════╗")
-    print("║  💬  TERMCHAT v6.3 — SERVEUR (sécurisé)  ║")
+    print("║  💬  TERMCHAT v6.1 — SERVEUR (sécurisé)  ║")
     print("║  by Aboudev Labs 🇨🇮                     ║")
     print("╚══════════════════════════════════════════╝")
     print(f"🔒 Bind: {BIND_HOST}:{PORT} | TLS requis: {REQUIRE_TLS} | Production: {PRODUCTION_MODE}")
