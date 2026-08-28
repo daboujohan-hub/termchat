@@ -41,7 +41,7 @@ REQUIRE_TLS = os.environ.get("REQUIRE_TLS", "1") != "0"
 REQUIRE_FIREBASE = os.environ.get("REQUIRE_FIREBASE", "1") != "0"
 REQUIRE_EXISTING_TLS_CERT = os.environ.get("REQUIRE_EXISTING_TLS_CERT", "0") != "0"
 ALLOW_SELF_SIGNED_DEV_CERT = os.environ.get("ALLOW_SELF_SIGNED_DEV_CERT", "0") == "1"
-ALLOW_INSECURE_GEOIP_CHECK = os.environ.get("ALLOW_INSECURE_GEOIP_CHECK", "0") == "1"
+GEOIP_CHECK_ACTIF = os.environ.get("GEOIP_CHECK_ACTIF", "1") == "1"
 ALLOW_LEGACY_SHA256_LOGIN = os.environ.get("ALLOW_LEGACY_SHA256_LOGIN", "0") == "1"
 ALLOW_INLINE_MEDIA = os.environ.get("ALLOW_INLINE_MEDIA", "0") == "1"
 ALLOW_ACCOUNT_DELETION = os.environ.get("ALLOW_ACCOUNT_DELETION", "0") == "1"
@@ -156,23 +156,24 @@ ISO_VERS_PREFIXE = {
 }
 
 def verifier_pays_ip(ip, prefixe_declare):
-    """Retourne (ok, pays_detecte).
-    Désactivé par défaut car la version gratuite du service de géolocalisation
-    IP utilisée ici n'offre pas un transport de confiance.
-    """
-    if not ALLOW_INSECURE_GEOIP_CHECK:
+    """Retourne (ok, pays_detecte). Verifie via api.country.is (HTTPS, gratuit,
+    sans cle) que le pays detecte par IP correspond au pays declare a
+    l'inscription (deduit du prefixe telephonique). Simple controle
+    anti-fraude a l'inscription, ne suit pas la position d'un utilisateur.
+    Actif par defaut ; mettre GEOIP_CHECK_ACTIF=0 pour le desactiver."""
+    if not GEOIP_CHECK_ACTIF:
         return True, None
     try:
         import urllib.request, json as _json
-        with urllib.request.urlopen(f"http://ip-api.com/json/{ip}?fields=countryCode,country", timeout=3) as resp:
+        with urllib.request.urlopen(f"https://api.country.is/{ip}", timeout=3) as resp:
             data = _json.loads(resp.read().decode())
-        code_iso = data.get("countryCode", "")
+        code_iso = data.get("country", "")
         if not code_iso:
             return True, None
         prefixe_detecte = ISO_VERS_PREFIXE.get(code_iso)
         if prefixe_detecte is None:
-            return True, data.get("country")
-        return (prefixe_detecte == prefixe_declare), data.get("country")
+            return True, code_iso
+        return (prefixe_detecte == prefixe_declare), code_iso
     except Exception:
         return True, None
 STATUTS = ["disponible", "occupe", "ne_pas_deranger", "absent"]
