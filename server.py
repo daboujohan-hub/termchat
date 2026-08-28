@@ -713,6 +713,8 @@ admins_connectes = set()
 lock             = threading.Lock()
 TIMEOUT          = 1800
 MAX_CONNEXIONS_SIMULTANEES = 500  # au-dela, nouvelles connexions refusees (protection DoS)
+connexions_count = 0
+connexions_lock = threading.Lock()
 MAX_TAILLE_BUFFER = MAX_BUFFER_BYTES
 
 # ── Anti-bruteforce ──────────────────────────────────────────
@@ -866,6 +868,10 @@ def gerer_client(conn, addr):
     buf       = ""
     est_admin = False
 
+    with connexions_lock:
+        global connexions_count
+        connexions_count += 1
+
     try:
         while True:
             conn.settimeout(TIMEOUT)
@@ -874,11 +880,11 @@ def gerer_client(conn, addr):
                 if num_co: envoyer_srv(conn, {"type":"timeout","msg":"Deconnecte pour inactivite."})
                 break
             if not chunk: break
-            buf += chunk
-            if len(buf) > MAX_TAILLE_BUFFER:
+            if len(buf) + len(chunk) > MAX_TAILLE_BUFFER:
                 try: envoyer_srv(conn, {"ok":False,"msg":"Message trop volumineux."})
                 except Exception: pass
                 break
+            buf += chunk
 
             while "\n" in buf:
                 ligne, buf = buf.split("\n", 1)
@@ -1954,6 +1960,8 @@ def gerer_client(conn, addr):
             except Exception: pass
         try: conn.close()
         except Exception: pass
+        with connexions_lock:
+            connexions_count -= 1
 
 # ══════════════════════════════════════════════════════════
 #  DÉMARRAGE
@@ -2019,9 +2027,9 @@ def main():
     while True:
         try:
             conn, addr = srv.accept()
-            with lock:
-                nb_actifs = threading.active_count()
-            if nb_actifs > MAX_CONNEXIONS_SIMULTANEES:
+            with connexions_lock:
+                nb_actifs = connexions_count
+            if nb_actifs >= MAX_CONNEXIONS_SIMULTANEES:
                 try: conn.close()
                 except Exception: pass
                 continue
