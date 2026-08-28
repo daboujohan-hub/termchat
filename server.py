@@ -19,6 +19,7 @@ import socket, threading, json, os, hashlib, re, uuid, binascii, ipaddress, rand
 import datetime, time, base64, signal, sys, ssl, secrets
 from pathlib import Path
 import bcrypt
+import pyotp
 
 # Firebase Admin SDK
 try:
@@ -259,6 +260,50 @@ def _fernet_fichiers():
         print(f"⚠️  FILE_ENCRYPTION_KEY invalide ({e}) — fichiers stockés en clair.")
         return None
 
+def totp_generer_secret():
+    """Genere un nouveau secret TOTP (base32, compatible Google Authenticator)."""
+    return pyotp.random_base32()
+
+def totp_chiffrer_secret(secret: str):
+    """Chiffre un secret TOTP avant stockage. Reutilise FILE_ENCRYPTION_KEY
+    (meme mecanisme que les fichiers proteges). Si aucune cle n'est configuree,
+    stocke en clair avec un avertissement (comme ecrire_fichier_protege)."""
+    fernet = _fernet_fichiers()
+    if fernet:
+        return fernet.encrypt(secret.encode()).decode()
+    print("⚠️  FILE_ENCRYPTION_KEY non definie — secret TOTP stocke en clair.")
+    return secret
+
+def totp_dechiffrer_secret(secret_stocke: str):
+    """Dechiffre un secret TOTP stocke. Retourne tel quel si pas chiffre."""
+    fernet = _fernet_fichiers()
+    if fernet:
+        try:
+            return fernet.decrypt(secret_stocke.encode()).decode()
+        except Exception:
+            return secret_stocke
+    return secret_stocke
+
+def totp_verifier_code(secret: str, code: str):
+    """Verifie un code TOTP a 6 chiffres (fenetre de tolerance de 1 pas = 30s)."""
+    if not secret or not code:
+        return False
+    try:
+        return pyotp.TOTP(secret).verify(code.strip(), valid_window=1)
+    except Exception:
+        return False
+
+def totp_generer_codes_recuperation(n=8):
+    """Genere n codes de recuperation a usage unique (format XXXX-XXXX)."""
+    codes = []
+    for _ in range(n):
+        brut = secrets.token_hex(4).upper()
+        codes.append(f"{brut[:4]}-{brut[4:]}")
+    return codes
+
+def totp_hacher_code_recup(code: str):
+    return hashlib.sha256(code.strip().upper().encode()).hexdigest()
+
 def ecrire_fichier_protege(chemin, data: bytes):
     """Écrit un fichier, chiffré au repos si une clé est configurée."""
     fernet = _fernet_fichiers()
@@ -400,6 +445,14 @@ def fs_get_user_by_email(email):
         return None, None
     except Exception as e:
         print(f"Firestore erreur: {e}"); return None, None
+
+def fs_get_user(uid):
+    if not db or not uid: return None
+    try:
+        doc = db.collection("users").document(uid).get()
+        return doc.to_dict() if doc.exists else None
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return None
 
 def fs_save_user(uid, data):
     if not db: return
@@ -733,6 +786,7 @@ connexions_actives = {}  # numero -> {"ip": str, "heure_connexion": str, "pays":
 # ── Alertes sécurité ──
 alertes_securite = []  # [{"heure", "severite", "type", "ip", "details"}]
 admins_connectes = set()
+connexions_en_attente_totp = {}  # conn -> {"uid": str, "ip": str}
 lock             = threading.Lock()
 TIMEOUT          = 1800
 MAX_CONNEXIONS_SIMULTANEES = 500  # au-dela, nouvelles connexions refusees (protection DoS)
@@ -975,6 +1029,7 @@ def gerer_client(conn, addr):
                             "cle_publique": (p.get("cle_publique") or "")[:8192] or None,
                             "premium": False, "premium_expire": None,
                             "premium_type": None, "active_par": None,
+                            "totp_actif": False, "totp_secret": None, "totp_recovery_codes": [],
                             "pays_incoherent": (not geo_ok),
                             "pays_detecte_ip": pays_reel
                         }
@@ -1010,7 +1065,12 @@ def gerer_client(conn, addr):
                         signaler_succes(cle_bf_acct)
                         if ALLOW_LEGACY_SHA256_LOGIN and not user.get("mdp","").startswith(("$2b$","$2a$")):
                             fs_update_user(uid, {"mdp": hacher(mdp)})
-                        num_co, est_admin = _connecter_user(conn, user, uid, ip_client=ip)
+                        if user.get("totp_actif"):
+                            with lock:
+                                connexions_en_attente_totp[conn] = {"uid": uid, "ip": ip}
+                            envoyer_srv(conn, {"ok":True,"totp_requis":True,"msg":"Entrez votre code TOTP."})
+                        else:
+                            num_co, est_admin = _connecter_user(conn, user, uid, ip_client=ip)
 
                 # ─── CONNEXION (email) ─────────────────────
                 # ─── CONNEXION (email) ─────────────────────
@@ -1039,7 +1099,12 @@ def gerer_client(conn, addr):
                         signaler_succes(cle_bf_acct)
                         if ALLOW_LEGACY_SHA256_LOGIN and not user.get("mdp","").startswith(("$2b$","$2a$")):
                             fs_update_user(uid, {"mdp": hacher(mdp)})
-                        num_co, est_admin = _connecter_user(conn, user, uid, ip_client=ip)
+                        if user.get("totp_actif"):
+                            with lock:
+                                connexions_en_attente_totp[conn] = {"uid": uid, "ip": ip}
+                            envoyer_srv(conn, {"ok":True,"totp_requis":True,"msg":"Entrez votre code TOTP."})
+                        else:
+                            num_co, est_admin = _connecter_user(conn, user, uid, ip_client=ip)
 
                 # ─── DEFINIR PSEUDO (migration anciens comptes) ──
                 elif act == "definir_pseudo":
@@ -1058,6 +1123,81 @@ def gerer_client(conn, addr):
                                 envoyer_srv(conn, {"ok":True,"pseudo":pseudo,"msg":f"Pseudo @{pseudo} enregistre!"})
                             else:
                                 envoyer_srv(conn, {"ok":False,"msg":"Compte introuvable."})
+
+                # ─── TOTP: VERIFIER CODE A LA CONNEXION ───
+                elif act == "totp_verifier_connexion":
+                    attente = connexions_en_attente_totp.get(conn)
+                    if not attente:
+                        envoyer_srv(conn, {"ok":False,"msg":"Aucune connexion en attente de code TOTP."})
+                    else:
+                        cle_bf_totp = f"totp_login:{attente['uid']}"
+                        if bloque(cle_bf_totp):
+                            envoyer_srv(conn, {"ok":False,"msg":f"Trop de tentatives. Reessaie dans {temps_restant(cle_bf_totp)}s."})
+                            continue
+                        code = p.get("code","").strip()
+                        uid = attente["uid"]
+                        user = fs_get_user(uid)
+                        secret = totp_dechiffrer_secret(user.get("totp_secret")) if user else None
+                        code_recup_valide = False
+                        if user and not totp_verifier_code(secret, code):
+                            # Tenter un code de recuperation
+                            code_hache = totp_hacher_code_recup(code)
+                            codes_actuels = user.get("totp_recovery_codes", [])
+                            if code_hache in codes_actuels:
+                                code_recup_valide = True
+                                fs_update_user(uid, {"totp_recovery_codes": [c for c in codes_actuels if c != code_hache]})
+                                fs_log_audit_complet(user.get("numero","?"), "totp_code_recup_utilise", "Connexion via code de recuperation TOTP", ip_client=attente["ip"])
+                        if not user or (not totp_verifier_code(secret, code) and not code_recup_valide):
+                            signaler_echec(cle_bf_totp)
+                            fs_log_audit_complet(user.get("numero","?") if user else "inconnu", "totp_login_echec", "Code TOTP invalide a la connexion", ip_client=attente["ip"])
+                            envoyer_srv(conn, {"ok":False,"msg":"Code invalide."})
+                        else:
+                            signaler_succes(cle_bf_totp)
+                            with lock:
+                                connexions_en_attente_totp.pop(conn, None)
+                            num_co, est_admin = _connecter_user(conn, user, uid, ip_client=attente["ip"])
+
+                # ─── TOTP: DEMARRER CONFIGURATION ─────────
+                elif act == "totp_setup_demarrer":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        uid, user = fs_get_user_by_numero(num_co)
+                        if not uid:
+                            envoyer_srv(conn, {"ok":False,"msg":"Compte introuvable."})
+                        elif user.get("totp_actif"):
+                            envoyer_srv(conn, {"ok":False,"msg":"TOTP deja active. Desactivez-le d'abord pour reconfigurer."})
+                        else:
+                            secret = totp_generer_secret()
+                            fs_update_user(uid, {"totp_secret": totp_chiffrer_secret(secret)})
+                            uri = pyotp.TOTP(secret).provisioning_uri(name=user.get("pseudo") or num_co, issuer_name="TermChat")
+                            envoyer_srv(conn, {"ok":True,"secret":secret,"uri":uri,
+                                "msg":"Entrez ce secret dans Google Authenticator, puis confirmez avec un code."})
+                            fs_log_audit_complet(num_co, "totp_setup_demarre", "Configuration TOTP initiee", ip_client=addr[0])
+
+                # ─── TOTP: CONFIRMER CONFIGURATION ────────
+                elif act == "totp_setup_confirmer":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        code = p.get("code","").strip()
+                        uid, user = fs_get_user_by_numero(num_co)
+                        secret_stocke = user.get("totp_secret") if user else None
+                        if not uid or not secret_stocke:
+                            envoyer_srv(conn, {"ok":False,"msg":"Aucune configuration TOTP en cours. Lancez totp_setup_demarrer d'abord."})
+                        else:
+                            secret = totp_dechiffrer_secret(secret_stocke)
+                            if not totp_verifier_code(secret, code):
+                                fs_log_audit_complet(num_co, "totp_setup_echec", "Code de confirmation TOTP invalide", ip_client=addr[0])
+                                envoyer_srv(conn, {"ok":False,"msg":"Code invalide. Reessayez."})
+                            else:
+                                codes_recup = totp_generer_codes_recuperation()
+                                codes_hashes = [totp_hacher_code_recup(c) for c in codes_recup]
+                                fs_update_user(uid, {"totp_actif": True, "totp_recovery_codes": codes_hashes})
+                                fs_log_audit_complet(num_co, "totp_active", "TOTP active avec succes", ip_client=addr[0])
+                                envoyer_srv(conn, {"ok":True,
+                                    "msg":"TOTP active ! Notez ces codes de recuperation (usage unique, affiches une seule fois).",
+                                    "codes_recuperation": codes_recup})
 
                 # ─── DÉCONNEXION ──────────────────────────
                 elif act == "deconnecter":
