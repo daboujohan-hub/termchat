@@ -304,6 +304,32 @@ def totp_generer_codes_recuperation(n=8):
 def totp_hacher_code_recup(code: str):
     return hashlib.sha256(code.strip().upper().encode()).hexdigest()
 
+def chiffrer_champ_repos(valeur):
+    """Chiffre une valeur texte avant stockage Firestore (reutilise FILE_ENCRYPTION_KEY).
+    Si aucune cle n'est configuree, retourne la valeur telle quelle (comportement
+    identique a l'existant, pas de regression)."""
+    if not valeur:
+        return valeur
+    fernet = _fernet_fichiers()
+    if not fernet:
+        return valeur
+    try:
+        return fernet.encrypt(valeur.encode()).decode()
+    except Exception:
+        return valeur
+
+def dechiffrer_champ_repos(valeur):
+    """Dechiffre une valeur chiffree par chiffrer_champ_repos."""
+    if not valeur:
+        return valeur
+    fernet = _fernet_fichiers()
+    if not fernet:
+        return valeur
+    try:
+        return fernet.decrypt(valeur.encode()).decode()
+    except Exception:
+        return valeur
+
 def ecrire_fichier_protege(chemin, data: bytes):
     """Écrit un fichier, chiffré au repos si une clé est configurée."""
     fernet = _fernet_fichiers()
@@ -599,6 +625,11 @@ def fs_get_feedback(limite=30):
 def fs_save_message(cle_conv, msg):
     if not db: return
     try:
+        fernet = _fernet_fichiers()
+        if fernet and msg.get("texte"):
+            msg = dict(msg)
+            msg["texte"] = fernet.encrypt(msg["texte"].encode()).decode()
+            msg["texte_chiffree"] = True
         db.collection("historique").document(cle_conv)\
           .collection("messages").document(msg["id"]).set(msg)
         db.collection("historique").document(cle_conv)\
@@ -615,6 +646,9 @@ def fs_get_messages(n1, n2, limite=50):
                  .order_by("heure", direction=firestore.Query.DESCENDING)\
                  .limit(limite).stream()
         msgs = [doc.to_dict() for doc in docs]
+        for m in msgs:
+            if m.get("texte_chiffree"):
+                m["texte"] = dechiffrer_champ_repos(m.get("texte",""))
         msgs.reverse()
         now = time.time()
         return [m for m in msgs if not m.get("expire_a") or m["expire_a"] > now]
@@ -707,7 +741,12 @@ def fs_get_conversations(numero):
                      .order_by("heure", direction=firestore.Query.DESCENDING)\
                      .limit(1).stream()
             dernier_msg = ""
-            for m in msgs: dernier_msg = m.to_dict().get("texte","")[:40]
+            for m in msgs:
+                d = m.to_dict()
+                txt = d.get("texte","")
+                if d.get("texte_chiffree"):
+                    txt = dechiffrer_champ_repos(txt)
+                dernier_msg = txt[:40]
             non_lus = 0
             msgs_nl = db.collection("historique").document(cid)\
                         .collection("messages")\
@@ -749,6 +788,11 @@ def fs_mes_groupes(numero):
 def fs_save_msg_groupe(gid, msg):
     if not db or not gid: return
     try:
+        fernet = _fernet_fichiers()
+        if fernet and msg.get("texte"):
+            msg = dict(msg)
+            msg["texte"] = fernet.encrypt(msg["texte"].encode()).decode()
+            msg["texte_chiffree"] = True
         db.collection("groupes").document(gid)\
           .collection("messages").add(msg)
         db.collection("groupes").document(gid)\
