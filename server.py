@@ -605,6 +605,15 @@ def fs_get_paiements_attente():
     except Exception as e:
         print(f"Firestore erreur: {e}"); return []
 
+def fs_get_paiement(pid):
+    if not db: return None
+    try:
+        doc = db.collection("paiements_attente").document(pid).get()
+        if not doc.exists: return None
+        return {**doc.to_dict(), "id": doc.id}
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return None
+
 def fs_update_paiement(pid, statut):
     if not db: return
     try:
@@ -2107,11 +2116,20 @@ def gerer_client(conn, addr):
                         pid    = p.get("id","").strip()
                         cible  = p.get("numero","").strip()
                         type_abo = p.get("type","mensuel")
+                        paiement = fs_get_paiement(pid)
                         uid, user = fs_get_user_by_numero(cible)
                         if not uid:
                             envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
                         elif type_abo not in TYPES_ABONNEMENT_VALIDES:
                             envoyer_srv(conn, {"ok":False,"msg":f"Type d'abonnement invalide. Valeurs autorisees: {', '.join(TYPES_ABONNEMENT_VALIDES)}."})
+                        elif not paiement:
+                            envoyer_srv(conn, {"ok":False,"msg":"Paiement introuvable."})
+                        elif paiement.get("statut") != "attente":
+                            envoyer_srv(conn, {"ok":False,"msg":"Ce paiement a deja ete traite."})
+                        elif paiement.get("numero") != cible:
+                            envoyer_srv(conn, {"ok":False,"msg":"Ce paiement n'appartient pas a ce numero."})
+                        elif TARIFS_PREMIUM.get(str(paiement.get("montant","")).strip()) != type_abo:
+                            envoyer_srv(conn, {"ok":False,"msg":"Le montant du paiement ne correspond pas au type d'abonnement choisi."})
                         else:
                             if type_abo == "fondateur":
                                 expire = None
