@@ -264,6 +264,35 @@ def generer_cle(n1, n2, phrase_secrete):
     return base64.urlsafe_b64encode(kdf.derive(phrase_secrete.encode()))
 
 
+def obtenir_cle_partagee(nd):
+    """Retourne la clé Fernet partagée avec un contact si elle est connue
+    (auto via échange de clés publiques, ou manuelle via phrase secrète)."""
+    cle = cles_partagees_cache.get(nd)
+    if cle:
+        return cle
+    phrase = phrases_secretes.get(nd)
+    if phrase:
+        try:
+            return generer_cle(session.get("numero", ""), nd, phrase)
+        except Exception:
+            return None
+    return None
+
+
+def chiffrer_bytes(data: bytes, cle) -> bytes:
+    """Chiffre des octets bruts avec Fernet, renvoie un token base64 standard
+    (le token Fernet est en base64 'urlsafe', réencodé en standard pour
+    passer la validation stricte du serveur)."""
+    token = Fernet(cle).encrypt(data)
+    return base64.b64encode(token)
+
+
+def dechiffrer_bytes(contenu_b64: bytes, cle) -> bytes:
+    """Inverse de chiffrer_bytes : redécode le base64 standard, puis déchiffre le token Fernet."""
+    token = base64.b64decode(contenu_b64, validate=True)
+    return Fernet(cle).decrypt(token)
+
+
 def chiffrer(t, cle):
     try:
         return Fernet(cle).encrypt(t.encode()).decode()
@@ -504,6 +533,13 @@ def afficher_entrant(p):
                 data = base64.b64decode(contenu_b64, validate=True)
                 if len(data) > MAX_FILE_RECV:
                     raise ValueError("Taille réelle trop grande")
+                if p.get("chiffre"):
+                    cle = obtenir_cle_partagee(p.get("numero", ""))
+                    if not cle:
+                        print(f"{R}     🔒 Fichier chiffré — ouvre la conversation pour établir la clé{Z}")
+                        print(f"{G}> {Z}", end="", flush=True)
+                        return
+                    data = dechiffrer_bytes(data, cle)
                 with open(chemin, "wb") as f:
                     f.write(data)
                 print(f"{V}     ✅ {chemin}{Z}")
@@ -529,6 +565,13 @@ def afficher_entrant(p):
                 data = base64.b64decode(contenu_b64, validate=True)
                 if len(data) > MAX_FILE_RECV:
                     raise ValueError("Taille réelle trop grande")
+                if p.get("chiffre"):
+                    cle = obtenir_cle_partagee(p.get("numero", ""))
+                    if not cle:
+                        print(f"{R}     🔒 Vocal chiffré — ouvre la conversation pour établir la clé{Z}")
+                        print(f"{G}> {Z}", end="", flush=True)
+                        return
+                    data = dechiffrer_bytes(data, cle)
                 with open(chemin, "wb") as f:
                     f.write(data)
                 print(f"{V}     ✅ {chemin}{Z}")
@@ -1152,9 +1195,16 @@ def _envoyer_fichier(nd, chemin):
         return None
     nom_f = os.path.basename(chemin)
     print(f"{G}📤 Envoi {nom_f} ({fmt(taille)})...{Z}")
+    cle = obtenir_cle_partagee(nd)
     try:
         with open(chemin, "rb") as f:
-            c64 = base64.b64encode(f.read()).decode()
+            raw = f.read()
+        if cle:
+            c64 = chiffrer_bytes(raw, cle).decode()
+            chiffre = True
+        else:
+            c64 = base64.b64encode(raw).decode()
+            chiffre = False
     except Exception as e:
         erreur(f"Lecture: {e}")
         return None
@@ -1164,7 +1214,8 @@ def _envoyer_fichier(nd, chemin):
             "dest": nd,
             "nom_fichier": nom_f,
             "contenu": c64,
-            "taille": taille,
+            "taille": len(base64.b64decode(c64)),
+            "chiffre": chiffre,
         }
     )
     rep = attendre(20)
@@ -1186,9 +1237,16 @@ def _envoyer_vocal(nd, chemin):
         erreur(f"Max {fmt(MAX_FILE_SEND)}.")
         return None
     print(f"{G}🎙️  Envoi vocal ({fmt(taille)})...{Z}")
+    cle = obtenir_cle_partagee(nd)
     try:
         with open(chemin, "rb") as f:
-            c64 = base64.b64encode(f.read()).decode()
+            raw = f.read()
+        if cle:
+            c64 = chiffrer_bytes(raw, cle).decode()
+            chiffre = True
+        else:
+            c64 = base64.b64encode(raw).decode()
+            chiffre = False
     except Exception as e:
         erreur(f"Lecture: {e}")
         return None
@@ -1197,8 +1255,9 @@ def _envoyer_vocal(nd, chemin):
             "action": "envoyer_vocal",
             "dest": nd,
             "contenu": c64,
-            "taille": taille,
+            "taille": len(base64.b64decode(c64)),
             "duree": 0,
+            "chiffre": chiffre,
         }
     )
     rep = attendre(20)

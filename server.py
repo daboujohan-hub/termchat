@@ -1730,6 +1730,7 @@ def gerer_client(conn, addr):
                         nom_fich = p.get("nom_fichier","fichier")
                         c64 = p.get("contenu","")
                         taille_raw = p.get("taille",0)
+                        chiffre_f = bool(p.get("chiffre", False))
                         _, exp_user = fs_get_user_by_numero(num_co)
                         _, dest_user = fs_get_user_by_numero(dest)
                         if not ALLOW_INLINE_MEDIA:
@@ -1751,14 +1752,14 @@ def gerer_client(conn, addr):
                                     "id": msg_id, "de": num_co, "vers": dest,
                                     "texte": safe_nom, "nom_fichier": safe_nom,
                                     "type": "fichier", "heure": horodatage(), "lu": False,
-                                    "chiffre": False, "taille": taille,
+                                    "chiffre": chiffre_f, "taille": taille,
                                     "stockage": "local_temporaire"
                                 }
                                 fs_save_message(cle, msg)
                                 nom_exp = exp_user.get("nom","?") if exp_user else "?"
                                 livre = livrer(dest, {"type":"fichier","de":nom_exp,
                                     "numero":num_co,"nom_fichier":safe_nom,"contenu":c64,
-                                    "taille":taille,"heure":heure(),"msg_id":msg_id})
+                                    "taille":taille,"heure":heure(),"msg_id":msg_id,"chiffre":chiffre_f})
                                 envoyer_srv(conn, {"ok":True,"livre":livre,"msg_id":msg_id,"msg":f"'{safe_nom}' envoyé."})
                             except Exception as e:
                                 envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
@@ -1771,6 +1772,7 @@ def gerer_client(conn, addr):
                         c64 = p.get("contenu","")
                         taille_raw = p.get("taille",0)
                         duree_raw = p.get("duree",0)
+                        chiffre_v = bool(p.get("chiffre", False))
                         try:
                             duree = int(duree_raw or 0)
                         except Exception:
@@ -1794,14 +1796,14 @@ def gerer_client(conn, addr):
                                     "id": msg_id, "de": num_co, "vers": dest,
                                     "texte": nom_fich, "nom_fichier": nom_fich,
                                     "type": "vocal", "heure": horodatage(), "lu": False,
-                                    "chiffre": False, "taille": taille, "duree": duree,
+                                    "chiffre": chiffre_v, "taille": taille, "duree": duree,
                                     "stockage": "local_temporaire"
                                 }
                                 fs_save_message(cle, msg)
                                 nom_exp = exp_user.get("nom","?") if exp_user else "?"
                                 livre = livrer(dest, {"type":"vocal","de":nom_exp,
                                     "numero":num_co,"nom_fichier":nom_fich,"contenu":c64,
-                                    "duree":duree,"taille":taille,"heure":heure(),"msg_id":msg_id})
+                                    "duree":duree,"taille":taille,"heure":heure(),"msg_id":msg_id,"chiffre":chiffre_v})
                                 envoyer_srv(conn, {"ok":True,"livre":livre,"msg_id":msg_id,"msg":"Vocal envoyé!"})
                             except Exception as e:
                                 envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
