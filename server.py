@@ -967,10 +967,40 @@ def notifier_statut(numero, en_ligne):
             envoyer_srv(sock, {"type": "statut", "numero": numero,
                                "nom": user.get("nom","?"), "en_ligne": en_ligne})
 
+# ══════════════════════════════════════════════════════════
+#  RBAC — RÔLES ADMIN
+# ══════════════════════════════════════════════════════════
+ROLES_ADMIN = {"super_admin", "moderator", "payment_admin"}
+
+# None = accès total (super_admin). Sinon: ensemble des actions autorisées.
+PERMISSIONS_PAR_ROLE = {
+    "super_admin": None,
+    "moderator": {
+        "admin_stats", "admin_feedback", "admin_users", "admin_broadcast",
+        "admin_kick", "admin_message", "admin_signalements", "admin_traiter_signalement",
+    },
+    "payment_admin": {
+        "admin_activer_premium", "admin_desactiver_premium",
+        "admin_paiements_attente", "admin_confirmer_paiement", "admin_rejeter_paiement",
+    },
+}
+
+def a_permission(role, action):
+    """Vérifie si un rôle admin a le droit d'exécuter une action donnée."""
+    if not role:
+        return False
+    perms = PERMISSIONS_PAR_ROLE.get(role)
+    if perms is None:
+        return True  # super_admin : accès total
+    return action in perms
+
+
 def _connecter_user(conn, user, uid, ip_client=""):
     """Finalise la connexion d'un utilisateur avec limite de sessions."""
     num_co    = user["numero"]
     est_admin = user.get("est_admin", False)
+    # Migration : anciens comptes admin sans champ "role" -> super_admin
+    admin_role = (user.get("role") or "super_admin") if est_admin else None
     non_lus   = fs_compter_non_lus(num_co)
 
     fs_update_user(uid, {"derniere_connexion": horodatage()})
@@ -1011,10 +1041,11 @@ def _connecter_user(conn, user, uid, ip_client=""):
         "a_pin": bool(user.get("pin")),
         "pseudo": user.get("pseudo",""),
         "premium": est_premium_actif(user),
-        "premium_type": user.get("premium_type")
+        "premium_type": user.get("premium_type"),
+        "role": admin_role
     })
     notifier_statut(num_co, True)
-    return num_co, est_admin
+    return num_co, est_admin, admin_role
 
 
 # ══════════════════════════════════════════════════════════
@@ -1024,6 +1055,7 @@ def gerer_client(conn, addr):
     num_co    = None
     buf       = ""
     est_admin = False
+    admin_role = None
 
     with connexions_lock:
         global connexions_count
@@ -1150,7 +1182,7 @@ def gerer_client(conn, addr):
                                 connexions_en_attente_totp[conn] = {"uid": uid, "ip": ip}
                             envoyer_srv(conn, {"ok":True,"totp_requis":True,"msg":"Entrez votre code TOTP."})
                         else:
-                            num_co, est_admin = _connecter_user(conn, user, uid, ip_client=ip)
+                            num_co, est_admin, admin_role = _connecter_user(conn, user, uid, ip_client=ip)
 
                 # ─── CONNEXION (email) ─────────────────────
                 # ─── CONNEXION (email) ─────────────────────
@@ -1184,7 +1216,7 @@ def gerer_client(conn, addr):
                                 connexions_en_attente_totp[conn] = {"uid": uid, "ip": ip}
                             envoyer_srv(conn, {"ok":True,"totp_requis":True,"msg":"Entrez votre code TOTP."})
                         else:
-                            num_co, est_admin = _connecter_user(conn, user, uid, ip_client=ip)
+                            num_co, est_admin, admin_role = _connecter_user(conn, user, uid, ip_client=ip)
 
                 # ─── DEFINIR PSEUDO (migration anciens comptes) ──
                 elif act == "definir_pseudo":
@@ -1235,7 +1267,7 @@ def gerer_client(conn, addr):
                             signaler_succes(cle_bf_totp)
                             with lock:
                                 connexions_en_attente_totp.pop(conn, None)
-                            num_co, est_admin = _connecter_user(conn, user, uid, ip_client=attente["ip"])
+                            num_co, est_admin, admin_role = _connecter_user(conn, user, uid, ip_client=attente["ip"])
 
                 # ─── TOTP: DEMARRER CONFIGURATION ─────────
                 elif act == "totp_setup_demarrer":
@@ -1901,7 +1933,7 @@ def gerer_client(conn, addr):
                                 envoyer_srv(conn, {"ok":False,"msg":"Erreur, reessaie plus tard."})
 
                 elif act == "admin_activer_premium":
-                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    if not a_permission(admin_role, "admin_activer_premium"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         cible = p.get("numero","").strip()
                         type_abo = p.get("type","mensuel")  # "mensuel", "annuel" ou "fondateur"
@@ -1926,7 +1958,7 @@ def gerer_client(conn, addr):
                                 envoyer_srv(conn, {"ok":True,"msg":f"Premium ({type_abo}) active pour {cible} jusqu'au {expire[:10]}."})
 
                 elif act == "admin_desactiver_premium":
-                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    if not a_permission(admin_role, "admin_desactiver_premium"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         cible = p.get("numero","").strip()
                         uid, _ = fs_get_user_by_numero(cible)
@@ -1962,27 +1994,28 @@ def gerer_client(conn, addr):
                     if secrets.compare_digest(p.get("code", "") or "", ADMIN_CODE):
                         signaler_succes(cle_bf)
                         est_admin = True
+                        admin_role = user.get("role") or "super_admin"
                         with lock:
                             admins_connectes.add(num_co)
-                        envoyer_srv(conn, {"ok": True, "msg": "Accès admin accordé."})
+                        envoyer_srv(conn, {"ok": True, "msg": "Accès admin accordé.", "role": admin_role})
                     else:
                         signaler_echec(cle_bf)
                         envoyer_srv(conn, {"ok": False, "msg": "Code incorrect."})
 
                 elif act == "admin_stats":
-                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    if not a_permission(admin_role, "admin_stats"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         stats = fs_get_stats()
                         with lock: stats["en_ligne"] = len(clients)
                         envoyer_srv(conn, {"ok":True,"stats":stats})
 
                 elif act == "admin_feedback":
-                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    if not a_permission(admin_role, "admin_feedback"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         envoyer_srv(conn, {"ok":True,"feedback":fs_get_feedback()})
 
                 elif act == "admin_users":
-                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    if not a_permission(admin_role, "admin_users"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         if db:
                             try:
@@ -1999,7 +2032,7 @@ def gerer_client(conn, addr):
                             except Exception as e: envoyer_srv(conn, {"ok":False,"msg":str(e)})
 
                 elif act == "admin_broadcast":
-                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    if not a_permission(admin_role, "admin_broadcast"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         cle_bf_br = f"broadcast_{num_co}"
                         if bloque(cle_bf_br):
@@ -2016,7 +2049,7 @@ def gerer_client(conn, addr):
                         envoyer_srv(conn, {"ok":True,"msg":f"Envoye a {len(tous)} utilisateurs."})
 
                 elif act == "admin_kick":
-                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    if not a_permission(admin_role, "admin_kick"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         cible = p.get("numero","").strip()
                         fs_log_audit(num_co, "kick", cible)
@@ -2029,7 +2062,7 @@ def gerer_client(conn, addr):
                         else: envoyer_srv(conn, {"ok":False,"msg":"Utilisateur hors ligne."})
 
                 elif act == "admin_message":
-                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    if not a_permission(admin_role, "admin_message"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         cible = p.get("numero","").strip()
                         texte = p.get("texte","").strip()
@@ -2043,13 +2076,13 @@ def gerer_client(conn, addr):
                                 envoyer_srv(conn, {"ok":False,"msg":"Utilisateur hors ligne, message non envoye."})
 
                 elif act == "admin_paiements_attente":
-                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    if not a_permission(admin_role, "admin_paiements_attente"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         paiements = fs_get_paiements_attente()
                         envoyer_srv(conn, {"ok":True,"paiements":paiements})
 
                 elif act == "admin_audit_log":
-                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    if not a_permission(admin_role, "admin_audit_log"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         if not db:
                             envoyer_srv(conn, {"ok":False,"msg":"Base de donnees indisponible."})
@@ -2062,7 +2095,7 @@ def gerer_client(conn, addr):
                                 envoyer_srv(conn, {"ok":False,"msg":str(e)})
 
                 elif act == "admin_confirmer_paiement":
-                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    if not a_permission(admin_role, "admin_confirmer_paiement"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         pid    = p.get("id","").strip()
                         cible  = p.get("numero","").strip()
@@ -2085,14 +2118,14 @@ def gerer_client(conn, addr):
                             envoyer_srv(conn, {"ok":True,"msg":f"Paiement confirme, premium ({type_abo}) active pour {cible}."})
 
                 elif act == "admin_rejeter_paiement":
-                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    if not a_permission(admin_role, "admin_rejeter_paiement"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         pid = p.get("id","").strip()
                         fs_update_paiement(pid, "rejete")
                         envoyer_srv(conn, {"ok":True,"msg":"Paiement rejete."})
 
                 elif act == "admin_surveillance":
-                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    if not a_permission(admin_role, "admin_surveillance"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         with lock:
                             result = []
@@ -2110,7 +2143,7 @@ def gerer_client(conn, addr):
                         envoyer_srv(conn, {"ok":True,"connexions":result})
 
                 elif act == "admin_alertes_securite":
-                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    if not a_permission(admin_role, "admin_alertes_securite"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         # Générer alertes dynamiques depuis l'audit log
                         alerts = []
@@ -2133,7 +2166,7 @@ def gerer_client(conn, addr):
                         envoyer_srv(conn, {"ok":True,"alertes":alerts})
 
                 elif act == "admin_voir_conversation":
-                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    if not a_permission(admin_role, "admin_voir_conversation"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         n1 = p.get("numero1","").strip()
                         n2 = p.get("numero2","").strip()
@@ -2152,7 +2185,7 @@ def gerer_client(conn, addr):
                             envoyer_srv(conn, {"ok":True,"historique":hist,"entre":f"{noms.get(n1,n1)} ↔ {noms.get(n2,n2)}"})
 
                 elif act == "admin_voir_fichiers":
-                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    if not a_permission(admin_role, "admin_voir_fichiers"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         fichiers = []
                         try:
@@ -2195,7 +2228,7 @@ def gerer_client(conn, addr):
                             envoyer_srv(conn, {"ok":True,"msg":"Signalement enregistré. L'admin va examiner."})
 
                 elif act == "admin_signalements":
-                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    if not a_permission(admin_role, "admin_signalements"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         sigs = []
                         if db:
@@ -2210,7 +2243,7 @@ def gerer_client(conn, addr):
                         envoyer_srv(conn, {"ok":True,"signalements":sigs})
 
                 elif act == "admin_traiter_signalement":
-                    if not est_admin: envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    if not a_permission(admin_role, "admin_traiter_signalement"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         sid = p.get("id","").strip()
                         decision = p.get("decision","").strip()  # "archive" ou "kick"
@@ -2220,6 +2253,26 @@ def gerer_client(conn, addr):
                             except Exception:
                                 pass
                         envoyer_srv(conn, {"ok":True,"msg":f"Signalement {decision}."})
+
+                elif act == "admin_gerer_role":
+                    if not a_permission(admin_role, "admin_gerer_role"):
+                        envoyer_srv(conn, {"ok":False,"msg":"Acces refuse. Seul le super-admin peut gerer les roles."})
+                    else:
+                        cible = p.get("numero","").strip()
+                        nouveau_role = p.get("role","").strip()  # "super_admin"/"moderator"/"payment_admin" ou "" pour retirer
+                        uid_c, user_c = fs_get_user_by_numero(cible)
+                        if not uid_c:
+                            envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        elif nouveau_role and nouveau_role not in ROLES_ADMIN:
+                            envoyer_srv(conn, {"ok":False,"msg":f"Role invalide. Valeurs autorisees: {', '.join(ROLES_ADMIN)}."})
+                        elif nouveau_role:
+                            fs_update_user(uid_c, {"est_admin": True, "role": nouveau_role})
+                            fs_log_audit(num_co, "gerer_role", cible, f"role={nouveau_role}")
+                            envoyer_srv(conn, {"ok":True,"msg":f"{cible} est maintenant {nouveau_role}."})
+                        else:
+                            fs_update_user(uid_c, {"est_admin": False, "role": None})
+                            fs_log_audit(num_co, "gerer_role", cible, "revoque")
+                            envoyer_srv(conn, {"ok":True,"msg":f"Acces admin retire pour {cible}."})
 
                 else: envoyer_srv(conn, {"ok":False,"msg":f"Action inconnue: {act}"})
 
