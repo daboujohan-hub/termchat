@@ -658,7 +658,7 @@ def inscrire():
     email = input(
         "Email (optionnel, pour te connecter aussi par email - Entrée pour passer): "
     ).strip()
-    mdp = input("Mot de passe (min 4): ").strip()
+    mdp = input("Mot de passe (min 12 car., 3 classes parmi minuscule/majuscule/chiffre/symbole): ").strip()
     if not mdp:
         erreur("Mot de passe requis.")
         entree()
