@@ -54,7 +54,7 @@ EXPIRE_SECONDES_MAX = int(os.environ.get("EXPIRE_SECONDES_MAX", "604800"))  # 7 
 MAX_NOM_GROUPE_LEN = int(os.environ.get("MAX_NOM_GROUPE_LEN", "100"))
 MAX_MEMBRES_GROUPE = int(os.environ.get("MAX_MEMBRES_GROUPE", "500"))
 MAX_EPINGLE_LEN = int(os.environ.get("MAX_EPINGLE_LEN", "1000"))
-TYPES_ABONNEMENT_VALIDES = ("mensuel", "annuel", "fondateur")
+TYPES_ABONNEMENT_VALIDES = ("mensuel", "annuel", "fondateur", "beta")
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(5 * 1024 * 1024)))
 MAX_BUFFER_BYTES = int(os.environ.get("MAX_BUFFER_BYTES", str(MAX_UPLOAD_BYTES * 2 + 1024 * 1024)))
 MAX_FEEDBACK_LEN = int(os.environ.get("MAX_FEEDBACK_LEN", "500"))
@@ -1949,12 +1949,13 @@ def gerer_client(conn, addr):
                             envoyer_srv(conn, {"ok":False,"msg":f"Type d'abonnement invalide. Valeurs autorisees: {', '.join(TYPES_ABONNEMENT_VALIDES)}."})
                         else:
                             fs_log_audit(num_co, "activer_premium", cible, type_abo)
-                            if type_abo == "fondateur":
+                            if type_abo in ("fondateur", "beta"):
                                 expire = None
+                                libelle = "Fondateur" if type_abo == "fondateur" else "Beta Testeur"
                                 fs_update_user(uid, {"premium":True,"premium_expire":expire,
                                     "premium_type":type_abo,"active_par":num_co})
-                                livrer(cible, {"type":"premium_active","expire":"jamais","premium_type":"fondateur","msg":"Ton compte Fondateur est actif a vie!"})
-                                envoyer_srv(conn, {"ok":True,"msg":f"Premium Fondateur (a vie) active pour {cible}."})
+                                livrer(cible, {"type":"premium_active","expire":"jamais","premium_type":type_abo,"msg":f"Ton compte {libelle} est actif a vie!"})
+                                envoyer_srv(conn, {"ok":True,"msg":f"Premium {libelle} (a vie) active pour {cible}."})
                             else:
                                 jours = 365 if type_abo == "annuel" else 30
                                 expire = (datetime.datetime.now() + datetime.timedelta(days=jours)).isoformat()
