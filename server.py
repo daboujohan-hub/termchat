@@ -1280,8 +1280,14 @@ def gerer_client(conn, addr):
                         elif user.get("totp_actif"):
                             envoyer_srv(conn, {"ok":False,"msg":"TOTP deja active. Desactivez-le d'abord pour reconfigurer."})
                         else:
-                            secret = totp_generer_secret()
-                            fs_update_user(uid, {"totp_secret": totp_chiffrer_secret(secret)})
+                            secret_existant = user.get("totp_secret")
+                            if secret_existant:
+                                # Une configuration est deja en attente (non confirmee) : on la reutilise
+                                # au lieu d'en generer une nouvelle, pour eviter un secret perime.
+                                secret = totp_dechiffrer_secret(secret_existant)
+                            else:
+                                secret = totp_generer_secret()
+                                fs_update_user(uid, {"totp_secret": totp_chiffrer_secret(secret)})
                             uri = pyotp.TOTP(secret).provisioning_uri(name=user.get("pseudo") or num_co, issuer_name="TermChat")
                             envoyer_srv(conn, {"ok":True,"secret":secret,"uri":uri,
                                 "msg":"Entrez ce secret dans Google Authenticator, puis confirmez avec un code."})
