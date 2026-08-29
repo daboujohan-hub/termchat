@@ -132,6 +132,7 @@ session = {
     "pseudo": "",
     "premium": False,
     "premium_type": None,
+    "role": None,
 }
 
 sock_cli = None
@@ -774,6 +775,7 @@ def _finaliser_connexion(rep):
             "pseudo": rep.get("pseudo", ""),
             "premium": rep.get("premium", False),
             "premium_type": rep.get("premium_type"),
+            "role": rep.get("role"),
         }
     )
     global ma_cle_privee
@@ -1655,20 +1657,37 @@ def panel_admin():
             entree()
             return
         session["est_admin"] = True
+        session["role"] = rep.get("role")
         succes("Accès accordé!")
+
+    OPTIONS_ADMIN = [
+        ("1", "📊  Statistiques", {"moderator"}),
+        ("2", "👥  Tous les utilisateurs", {"moderator"}),
+        ("3", "📢  Broadcast", {"moderator"}),
+        ("4", "⛔  Kick utilisateur", {"moderator"}),
+        ("5", "💌  Feedback reçus", {"moderator"}),
+        ("6", "⭐  Gérer premium (activer/désactiver)", {"payment_admin"}),
+        ("7", "📩  Message à un utilisateur", {"moderator"}),
+        ("8", "💰  Paiements en attente", {"payment_admin"}),
+        ("9", "📜  Journal d'audit", set()),
+        ("s", "🛡️  Surveillance connexions", set()),
+        ("a", "🚨  Alertes sécurité", set()),
+        ("c", "💬  Voir une conversation (modération)", set()),
+        ("f", "📎  Fichiers uploadés", set()),
+        ("g", "🚩  Signalements", {"moderator"}),
+        ("p", "🔑  Gérer les rôles admin", set()),
+    ]
+
+    def _admin_a_acces(roles_autorises):
+        role = session.get("role")
+        return role == "super_admin" or role in roles_autorises
 
     while en_cours and session.get("connecte"):
         titre("⚙️  PANEL ADMIN")
         C2 = get_C()
-        print(f"  {C2}1{Z} — 📊  Statistiques")
-        print(f"  {C2}2{Z} — 👥  Tous les utilisateurs")
-        print(f"  {C2}3{Z} — 📢  Broadcast")
-        print(f"  {C2}4{Z} — ⛔  Kick utilisateur")
-        print(f"  {C2}5{Z} — 💌  Feedback reçus")
-        print(f"  {C2}6{Z} — ⭐  Gérer premium (activer/désactiver)")
-        print(f"  {C2}7{Z} — 📩  Message à un utilisateur")
-        print(f"  {C2}8{Z} — 💰  Paiements en attente")
-        print(f"  {C2}9{Z} — 📜  Journal d'audit")
+        for cle, label, roles in OPTIONS_ADMIN:
+            if _admin_a_acces(roles):
+                print(f"  {C2}{cle}{Z} — {label}")
         print(f"  {C2}r{Z} — 🔙  Retour\n")
         choix = input(f"{J}Choix: {Z}").strip().lower()
 
@@ -1950,6 +1969,24 @@ def panel_admin():
                         print(f"  📎 {f.get('nom','?')}  {G}{taille}{Z}  {f.get('date','')}")
             else:
                 erreur("Erreur.")
+            entree()
+
+        elif choix == "p":
+            numero = input("Numéro du compte à gérer: ").strip()
+            print(
+                "  1 — super_admin  |  2 — moderator  |  3 — payment_admin  |  4 — Retirer l'accès admin"
+            )
+            c2 = input("Choix: ").strip()
+            roles_map = {"1": "super_admin", "2": "moderator", "3": "payment_admin", "4": ""}
+            if c2 in roles_map:
+                envoyer_cli(
+                    {"action": "admin_gerer_role", "numero": numero, "role": roles_map[c2]}
+                )
+                rep = attendre()
+                if rep and rep.get("ok"):
+                    succes(rep.get("msg", ""))
+                else:
+                    erreur(rep.get("msg", "?") if rep else "?")
             entree()
 
         elif choix == "g":
