@@ -298,6 +298,8 @@ def get_theme():
     pt = session.get("premium_type")
     if pt == "fondateur":
         return ("\033[93m", "Fondateur 🏆", "Merci de faire partie de l'aventure")
+    elif pt == "beta":
+        return ("\033[92m", "Bêta Testeur 🧪", "Merci de tester TermChat avant tout le monde")
     elif pt == "annuel":
         return ("\033[95m", "Premium 💎", "Abonnement annuel · Support prio")
     elif pt == "mensuel" or session.get("premium"):
@@ -1614,6 +1616,8 @@ def menu_securite():
                     pt = rep.get("premium_type", "?")
                     if pt == "fondateur":
                         print(f"  {J}🏆 Fondateur — premium à vie{Z}")
+                    elif pt == "beta":
+                        print(f"  {V}🧪 Bêta Testeur — premium à vie (merci !){Z}")
                     else:
                         exp = (rep.get("premium_expire") or "")[:10]
                         print(f"  {V}✅ Premium actif ({pt}){Z}")
