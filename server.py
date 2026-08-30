@@ -1407,6 +1407,9 @@ def gerer_client(conn, addr):
                         # (protège contre la substitution de clé / MITM E2E)
                         if ancienne and ancienne != cle_pub:
                             print(f"⚠️  Refus de changement de clé publique pour {num_co}")
+                            fs_log_audit_complet(num_co, "cle_publique_rejetee",
+                                "Tentative de republication d'une cle publique differente (E2E potentiellement desynchronise)",
+                                ip_client=addr[0])
                             envoyer_srv(conn, {
                                 "ok": False,
                                 "msg": "Une clé publique existe déjà. Rotation non autorisée pour le moment."
@@ -2238,7 +2241,7 @@ def gerer_client(conn, addr):
                         alerts = []
                         if db:
                             try:
-                                docs = db.collection("audit_log")                                         .where(filter=FieldFilter("action", "in", ["echec_login", "echec_login_email", "session_kick_auto"]))                                         .order_by("heure", direction=firestore.Query.DESCENDING)                                         .limit(50).stream()
+                                docs = db.collection("audit_log")                                         .where(filter=FieldFilter("action", "in", ["echec_login", "echec_login_email", "session_kick_auto", "cle_publique_rejetee"]))                                         .order_by("heure", direction=firestore.Query.DESCENDING)                                         .limit(50).stream()
                                 for d in docs:
                                     data = d.to_dict()
                                     sev = "CRITIQUE" if "echec" in data.get("action","") and "login" in data.get("action","") else "MOYEN"
