@@ -2363,6 +2363,21 @@ def gerer_client(conn, addr):
                             fs_log_audit(num_co, "gerer_role", cible, "revoque")
                             envoyer_srv(conn, {"ok":True,"msg":f"Acces admin retire pour {cible}."})
 
+                elif act == "admin_reinitialiser_cle":
+                    if not a_permission(admin_role, "admin_reinitialiser_cle"):
+                        envoyer_srv(conn, {"ok":False,"msg":"Acces refuse. Seul le super-admin peut reinitialiser une cle publique."})
+                    else:
+                        cible = p.get("numero","").strip()
+                        uid_c, user_c = fs_get_user_by_numero(cible)
+                        if not uid_c:
+                            envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        elif not user_c.get("cle_publique"):
+                            envoyer_srv(conn, {"ok":False,"msg":"Ce compte n'a pas de cle publique enregistree."})
+                        else:
+                            fs_update_user(uid_c, {"cle_publique": None})
+                            fs_log_audit(num_co, "reinitialiser_cle_publique", cible, "cle publique effacee")
+                            envoyer_srv(conn, {"ok":True,"msg":f"Cle publique de {cible} reinitialisee. Elle sera republiee a sa prochaine connexion. Prevenir l'utilisateur : ses contacts devront revalider l'empreinte /empreinte."})
+
                 else: envoyer_srv(conn, {"ok":False,"msg":f"Action inconnue: {act}"})
 
     except Exception as e:
