@@ -1859,6 +1859,50 @@ def gerer_client(conn, addr):
                             livrer(cible, {"type":"invitation_groupe","groupe":groupe.get("nom","?"),"id_groupe":gid,"heure":heure()})
                             envoyer_srv(conn, {"ok":True,"msg":"Membre ajoute!"})
 
+                elif act == "membres_groupe":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        gid = p.get("id_groupe","").strip()
+                        groupe = fs_get_groupe(gid)
+                        if not groupe or num_co not in groupe.get("membres",[]):
+                            envoyer_srv(conn, {"ok":False,"msg":"Groupe introuvable ou non membre."})
+                        else:
+                            envoyer_srv(conn, {"ok":True,"membres":groupe.get("membres",[]),"epoch":groupe.get("epoch",0)})
+
+                elif act == "maj_cle_groupe":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        gid = p.get("id_groupe","").strip()
+                        cles = p.get("cles", {})
+                        groupe = fs_get_groupe(gid)
+                        if not groupe:
+                            envoyer_srv(conn, {"ok":False,"msg":"Groupe introuvable."})
+                        elif groupe["createur"] != num_co:
+                            envoyer_srv(conn, {"ok":False,"msg":"Seul le createur peut gerer les cles."})
+                        elif not isinstance(cles, dict) or not cles:
+                            envoyer_srv(conn, {"ok":False,"msg":"Cles manquantes."})
+                        else:
+                            epoch = groupe.get("epoch", 0) + 1
+                            if db: db.collection("groupes").document(gid).update({"cles_membres": cles, "epoch": epoch})
+                            for m, wrapped in cles.items():
+                                if m != num_co:
+                                    livrer(m, {"type":"cle_groupe","id_groupe":gid,"epoch":epoch,"cle":wrapped})
+                            envoyer_srv(conn, {"ok":True,"epoch":epoch,"msg":"Cle de groupe distribuee."})
+
+                elif act == "obtenir_cle_groupe":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        gid = p.get("id_groupe","").strip()
+                        groupe = fs_get_groupe(gid)
+                        if not groupe or num_co not in groupe.get("membres",[]):
+                            envoyer_srv(conn, {"ok":False,"msg":"Groupe introuvable ou non membre."})
+                        else:
+                            cles = groupe.get("cles_membres", {})
+                            envoyer_srv(conn, {"ok":True,"epoch":groupe.get("epoch",0),"cle":cles.get(num_co),"createur":groupe.get("createur")})
+
                 elif act == "msg_groupe":
                     if not num_co:
                         envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
@@ -1873,11 +1917,13 @@ def gerer_client(conn, addr):
                         elif groupe and num_co in groupe.get("membres",[]) and texte and not est_premium_actif(eu) and len(texte) > MAX_MESSAGE_LEN_FREE:
                             envoyer_srv(conn, {"ok":False,"msg":"Message trop long (max 150 caracteres en gratuit). Passe premium pour debloquer."})
                         elif groupe and num_co in groupe.get("membres",[]) and texte:
-                            msg  = {"de":num_co,"nom":eu.get("nom","?") if eu else "?","texte":texte,"heure":horodatage(),"reply_to":reply}
+                            chiffre_g = bool(p.get("chiffre", False))
+                            epoch_g = p.get("epoch")
+                            msg  = {"de":num_co,"nom":eu.get("nom","?") if eu else "?","texte":texte,"heure":horodatage(),"reply_to":reply,"chiffre":chiffre_g,"epoch":epoch_g}
                             fs_save_msg_groupe(gid, msg)
                             for m in groupe.get("membres",[]):
                                 if m!=num_co: livrer(m, {"type":"msg_groupe","groupe":groupe.get("nom","?"),"id_groupe":gid,
-                                    "de":eu.get("nom","?") if eu else "?","numero":num_co,"texte":texte,"heure":heure(),"reply_to":reply})
+                                    "de":eu.get("nom","?") if eu else "?","numero":num_co,"texte":texte,"heure":heure(),"reply_to":reply,"chiffre":chiffre_g,"epoch":epoch_g})
                             envoyer_srv(conn, {"ok":True})
                         else: envoyer_srv(conn, {"ok":False,"msg":"Groupe introuvable ou non membre."})
 

@@ -143,6 +143,7 @@ rep_lock = threading.Lock()
 phrases_secretes = {}          # numero -> phrase secrète (RAM uniquement)
 ma_cle_privee = None
 cles_partagees_cache = {}      # numero -> clé Fernet dérivée
+cles_groupes_cache = {}        # id_groupe -> {epoch: clé Fernet}
 
 # Le code de connexion TLS est dans main().
 
@@ -277,6 +278,79 @@ def obtenir_cle_partagee(nd):
         except Exception:
             return None
     return None
+
+
+def distribuer_cle_groupe(id_groupe, membres):
+    """Genere une nouvelle cle de groupe et la distribue, chiffree individuellement
+    pour chaque membre actuel (via ECDH X25519 1-a-1). Seul le createur du groupe
+    doit appeler cette fonction (creation du groupe, ajout ou retrait d'un membre).
+    Retourne le numero d'epoque si succes, sinon None."""
+    if not ma_cle_privee:
+        return None
+    moi = session.get("numero", "")
+    nouvelle_cle = Fernet.generate_key()
+    cles_wrap = {}
+    ma_pub = cle_publique_b64(ma_cle_privee)
+    for m in membres:
+        if m == moi:
+            cle_pub_m = ma_pub
+        else:
+            envoyer_cli({"action": "chercher", "numero": m})
+            rep = attendre()
+            if not rep or not rep.get("ok"):
+                continue
+            cle_pub_m = rep.get("user", {}).get("cle_publique")
+        if not cle_pub_m:
+            continue
+        try:
+            partagee = deriver_cle_partagee(ma_cle_privee, cle_pub_m, moi, m)
+            cles_wrap[m] = chiffrer_bytes(nouvelle_cle, partagee).decode()
+        except Exception:
+            continue
+    envoyer_cli({"action": "maj_cle_groupe", "id_groupe": id_groupe, "cles": cles_wrap})
+    rep = attendre()
+    if rep and rep.get("ok"):
+        epoch = rep.get("epoch")
+        cles_groupes_cache.setdefault(id_groupe, {})[epoch] = nouvelle_cle
+        return epoch
+    return None
+
+
+def obtenir_cle_groupe(id_groupe):
+    """Retourne la clé de groupe pour l'époque courante, en la récupérant du
+    serveur si elle n'est pas déjà en cache local (ex: après reconnexion)."""
+    cache = cles_groupes_cache.get(id_groupe, {})
+    if cache:
+        epoch_max = max(cache.keys())
+        return epoch_max, cache[epoch_max]
+    envoyer_cli({"action": "obtenir_cle_groupe", "id_groupe": id_groupe})
+    rep = attendre()
+    if not rep or not rep.get("ok") or not rep.get("cle") or not ma_cle_privee:
+        return None, None
+    createur = rep.get("createur")
+    moi = session.get("numero", "")
+    if not createur:
+        return None, None
+    if createur == moi:
+        cle_pub_source = cle_publique_b64(ma_cle_privee)
+        source = moi
+    else:
+        envoyer_cli({"action": "chercher", "numero": createur})
+        rep_c = attendre()
+        if not rep_c or not rep_c.get("ok"):
+            return None, None
+        cle_pub_source = rep_c.get("user", {}).get("cle_publique")
+        source = createur
+    if not cle_pub_source:
+        return None, None
+    try:
+        partagee = deriver_cle_partagee(ma_cle_privee, cle_pub_source, moi, source)
+        cle_groupe = dechiffrer_bytes(rep["cle"].encode(), partagee)
+        epoch = rep.get("epoch")
+        cles_groupes_cache.setdefault(id_groupe, {})[epoch] = cle_groupe
+        return epoch, cle_groupe
+    except Exception:
+        return None, None
 
 
 def chiffrer_bytes(data: bytes, cle) -> bytes:
@@ -583,11 +657,34 @@ def afficher_entrant(p):
     elif t == "msg_groupe":
         beep()
         reply = p.get("reply_to")
+        texte_g = p.get("texte", "")
+        if p.get("chiffre"):
+            id_g = p.get("id_groupe")
+            epoch_g = p.get("epoch")
+            cle_g = cles_groupes_cache.get(id_g, {}).get(epoch_g)
+            if cle_g:
+                try:
+                    texte_g = dechiffrer(texte_g, cle_g)
+                except Exception:
+                    texte_g = "🔒 [Message de groupe chiffré — clé incorrecte]"
+            else:
+                # Ne jamais faire d'appel réseau bloquant ici : ce code tourne
+                # dans le thread d'écoute, pas le thread principal. La clé sera
+                # récupérée proprement via obtenir_cle_groupe() à l'ouverture
+                # du groupe ou au prochain envoi.
+                texte_g = "🔒 [Message de groupe chiffré — ouvre le groupe pour établir la clé]"
         print(f"\n{C2}{B}[{h}] 👥 [{p.get('groupe', '?')}] {p.get('de', '?')}{Z}")
         if reply:
             print(f"{G}     ↩️  {reply[:40]}{Z}")
-        print(f"     {p.get('texte', '')}")
+        print(f"     {texte_g}")
         print(f"{G}> {Z}", end="", flush=True)
+
+    elif t == "cle_groupe":
+        # Nouvelle clé de groupe reçue en direct (rotation suite à un ajout de
+        # membre) : on invalide le cache local, obtenir_cle_groupe() la
+        # rechargera proprement (avec le createur) au prochain message.
+        id_g = p.get("id_groupe")
+        cles_groupes_cache.pop(id_g, None)
 
     elif t == "invitation_groupe":
         beep()
@@ -1325,6 +1422,7 @@ def menu_groupes():
             if rep and rep.get("ok"):
                 succes(f"Groupe '{nom}' créé!")
                 print(f"   {G}ID: {rep.get('id_groupe')}{Z}")
+                distribuer_cle_groupe(rep.get("id_groupe"), [session.get("numero", "")])
             else:
                 erreur(rep.get("msg", "?") if rep else "?")
             entree()
@@ -1333,6 +1431,7 @@ def menu_groupes():
             if not id_g:
                 continue
             reply_id = None
+            obtenir_cle_groupe(id_g)
             print(f"\n{G}exit | /epingler | /repondre{Z}\n")
             while True:
                 try:
@@ -1359,12 +1458,21 @@ def menu_groupes():
                     reply_id = rt
                     info(f"Tu répondras à: {rt[:30]}")
                     continue
+                epoch_g, cle_g = obtenir_cle_groupe(id_g)
+                if cle_g:
+                    texte_env = chiffrer(texte, cle_g)
+                    chiffre_g = True
+                else:
+                    texte_env = texte
+                    chiffre_g = False
                 envoyer_cli(
                     {
                         "action": "msg_groupe",
                         "id_groupe": id_g,
-                        "texte": texte,
+                        "texte": texte_env,
                         "reply_to": reply_id,
+                        "chiffre": chiffre_g,
+                        "epoch": epoch_g,
                     }
                 )
                 reply_id = None
@@ -1380,6 +1488,10 @@ def menu_groupes():
             rep = attendre()
             if rep and rep.get("ok"):
                 succes(rep.get("msg", "Ajouté!"))
+                envoyer_cli({"action": "membres_groupe", "id_groupe": id_g})
+                rep_m = attendre()
+                if rep_m and rep_m.get("ok"):
+                    distribuer_cle_groupe(id_g, rep_m.get("membres", []))
             else:
                 erreur(rep.get("msg", "?") if rep else "?")
             entree()
