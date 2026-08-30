@@ -935,9 +935,14 @@ def _finaliser_connexion(rep):
                 "cle_publique": cle_publique_b64(ma_cle_privee),
             }
         )
+        rep_cle = attendre(3)
+        if rep_cle and not rep_cle.get("ok"):
+            print(f"\n{R}⚠️  Ta clé de chiffrement locale ne correspond plus à celle publiée sur le serveur.{Z}")
+            print(f"{R}   Le chiffrement de bout en bout risque d'être désynchronisé avec tes contacts")
+            print(f"{R}   (l'empreinte /empreinte pourrait ne plus correspondre du côté de tes contacts).{Z}")
+            print(f"{R}   Cause probable : réinstallation de l'app ayant généré une nouvelle clé locale.{Z}")
     except Exception:
         pass
-    attendre(3)
 
     if session.get("a_pin"):
         tentatives = 0
