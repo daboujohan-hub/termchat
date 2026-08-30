@@ -10,6 +10,7 @@ import socket
 import threading
 import json
 import os
+import subprocess
 import base64
 import ssl
 import datetime
@@ -393,6 +394,19 @@ def beep():
     print("\a", end="", flush=True)
 
 
+def notifier_systeme(titre, texte):
+    """Affiche une notification Android via Termux:API, si installé.
+    N'échoue jamais silencieusement l'app si Termux:API n'est pas présent."""
+    try:
+        subprocess.run(
+            ["termux-notification", "--title", titre, "--content", texte,
+             "--id", "termchat"],
+            timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+
 def get_C():
     return COULEURS.get(session.get("couleur", "cyan"), "\033[96m")
 
@@ -550,6 +564,7 @@ def afficher_entrant(p):
             else:
                 texte = "🔒 [Message chiffré — ouvre la conversation pour établir la clé]"
         beep()
+        notifier_systeme(f"💬 {p.get('de', '?')}", texte[:100])
         reply = p.get("reply_to")
         _pt = p.get("premium_type")
         if _pt == "fondateur":
@@ -589,6 +604,7 @@ def afficher_entrant(p):
         taille = p.get("taille", 0)
         contenu_b64 = p.get("contenu", "")
         beep()
+        notifier_systeme(f"📎 {p.get('de', '?')}", f"Fichier: {nom_f}")
         print(f"\n{M}{B}[{h}] 📎 {p.get('de', '?')} → {nom_f} ({fmt(taille)}){Z}")
 
         if not contenu_b64:
@@ -626,6 +642,7 @@ def afficher_entrant(p):
         duree = p.get("duree", 0)
         contenu_b64 = p.get("contenu", "")
         beep()
+        notifier_systeme(f"🎙️ {p.get('de', '?')}", f"Message vocal ({duree}s)")
         print(f"\n{M}{B}[{h}] 🎙️  {p.get('de', '?')} → Message vocal ({duree}s){Z}")
 
         if not contenu_b64:
@@ -673,6 +690,7 @@ def afficher_entrant(p):
                 # récupérée proprement via obtenir_cle_groupe() à l'ouverture
                 # du groupe ou au prochain envoi.
                 texte_g = "🔒 [Message de groupe chiffré — ouvre le groupe pour établir la clé]"
+        notifier_systeme(f"👥 {p.get('groupe', '?')} · {p.get('de', '?')}", texte_g[:100])
         print(f"\n{C2}{B}[{h}] 👥 [{p.get('groupe', '?')}] {p.get('de', '?')}{Z}")
         if reply:
             print(f"{G}     ↩️  {reply[:40]}{Z}")
