@@ -1879,6 +1879,7 @@ def panel_admin():
         ("f", "📎  Fichiers uploadés", set()),
         ("g", "🚩  Signalements", {"moderator"}),
         ("p", "🔑  Gérer les rôles admin", set()),
+        ("k", "🔐  Réinitialiser une clé publique (E2E)", set()),
     ]
 
     def _admin_a_acces(roles_autorises):
@@ -2185,6 +2186,20 @@ def panel_admin():
                 envoyer_cli(
                     {"action": "admin_gerer_role", "numero": numero, "role": roles_map[c2]}
                 )
+                rep = attendre()
+                if rep and rep.get("ok"):
+                    succes(rep.get("msg", ""))
+                else:
+                    erreur(rep.get("msg", "?") if rep else "?")
+            entree()
+
+        elif choix == "k":
+            numero = input("Numéro du compte dont réinitialiser la clé publique: ").strip()
+            print(f"{J}⚠️  Ceci force la republication de la clé E2E de ce compte à sa{Z}")
+            print(f"{J}   prochaine connexion. Ses contacts devront revalider /empreinte.{Z}")
+            confirmation = input("Confirmer ? (o/n): ").strip().lower()
+            if confirmation == "o":
+                envoyer_cli({"action": "admin_reinitialiser_cle", "numero": numero})
                 rep = attendre()
                 if rep and rep.get("ok"):
                     succes(rep.get("msg", ""))
