@@ -1859,6 +1859,22 @@ def gerer_client(conn, addr):
                             livrer(cible, {"type":"invitation_groupe","groupe":groupe.get("nom","?"),"id_groupe":gid,"heure":heure()})
                             envoyer_srv(conn, {"ok":True,"msg":"Membre ajoute!"})
 
+                elif act == "retirer_groupe":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        gid=p.get("id_groupe","").strip(); cible=p.get("numero","").strip()
+                        groupe = fs_get_groupe(gid)
+                        if not groupe: envoyer_srv(conn, {"ok":False,"msg":"Groupe introuvable."})
+                        elif groupe["createur"]!=num_co: envoyer_srv(conn, {"ok":False,"msg":"Seul le createur peut retirer un membre."})
+                        elif cible == groupe["createur"]: envoyer_srv(conn, {"ok":False,"msg":"Le createur ne peut pas se retirer lui-meme."})
+                        elif cible not in groupe.get("membres",[]): envoyer_srv(conn, {"ok":False,"msg":"N'est pas membre de ce groupe."})
+                        else:
+                            membres = [m for m in groupe.get("membres",[]) if m != cible]
+                            if db: db.collection("groupes").document(gid).update({"membres":membres})
+                            livrer(cible, {"type":"retire_groupe","groupe":groupe.get("nom","?"),"id_groupe":gid,"heure":heure()})
+                            envoyer_srv(conn, {"ok":True,"msg":"Membre retire!"})
+
                 elif act == "membres_groupe":
                     if not num_co:
                         envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})

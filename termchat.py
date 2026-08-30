@@ -691,6 +691,12 @@ def afficher_entrant(p):
         print(f"\n{J}{B}📩 Ajouté au groupe '{p.get('groupe', '?')}' !{Z}")
         print(f"{G}> {Z}", end="", flush=True)
 
+    elif t == "retire_groupe":
+        beep()
+        cles_groupes_cache.pop(p.get("id_groupe"), None)
+        print(f"\n{R}{B}⛔ Tu as été retiré du groupe '{p.get('groupe', '?')}'.{Z}")
+        print(f"{G}> {Z}", end="", flush=True)
+
     elif t == "epingle":
         print(f"\n{J}{B}📌 [{p.get('groupe', '?')}] Épinglé: {p.get('texte', '')}{Z}")
         print(f"{G}> {Z}", end="", flush=True)
@@ -1392,6 +1398,7 @@ def menu_groupes():
         print(f"  {C2}2{Z} — ➕  Créer un groupe")
         print(f"  {C2}3{Z} — 💬  Entrer dans un groupe")
         print(f"  {C2}4{Z} — 👤  Ajouter un membre")
+        print(f"  {C2}5{Z} — ⛔  Retirer un membre")
         print(f"  {C2}r{Z} — 🔙  Retour\n")
         choix = input(f"{J}Choix: {Z}").strip().lower()
         if choix == "1":
@@ -1488,6 +1495,22 @@ def menu_groupes():
             rep = attendre()
             if rep and rep.get("ok"):
                 succes(rep.get("msg", "Ajouté!"))
+                envoyer_cli({"action": "membres_groupe", "id_groupe": id_g})
+                rep_m = attendre()
+                if rep_m and rep_m.get("ok"):
+                    distribuer_cle_groupe(id_g, rep_m.get("membres", []))
+            else:
+                erreur(rep.get("msg", "?") if rep else "?")
+            entree()
+        elif choix == "5":
+            id_g = input("ID du groupe: ").strip()
+            numero = input("Numéro du membre à retirer: ").strip()
+            envoyer_cli(
+                {"action": "retirer_groupe", "id_groupe": id_g, "numero": numero}
+            )
+            rep = attendre()
+            if rep and rep.get("ok"):
+                succes(rep.get("msg", "Retiré!"))
                 envoyer_cli({"action": "membres_groupe", "id_groupe": id_g})
                 rep_m = attendre()
                 if rep_m and rep_m.get("ok"):
