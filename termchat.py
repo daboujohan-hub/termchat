@@ -413,7 +413,9 @@ def get_C():
 
 def get_theme():
     pt = session.get("premium_type")
-    if pt == "fondateur":
+    if session.get("role") == "super_admin":
+        return ("\033[91m", "Super Admin 👑", "Avantages premium automatiques")
+    elif pt == "fondateur":
         return ("\033[93m", "Fondateur 🏆", "Merci de faire partie de l'aventure")
     elif pt == "beta":
         return ("\033[92m", "Bêta Testeur 🧪", "Merci de tester TermChat avant tout le monde")

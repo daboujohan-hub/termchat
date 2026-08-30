@@ -407,8 +407,11 @@ def horodatage(): return datetime.datetime.now().isoformat()
 def heure():      return datetime.datetime.now().strftime("%H:%M")
 
 def est_premium_actif(user):
-    """True si le compte a un premium actif et non expire (ou a vie)."""
-    if not user or not user.get("premium"): return False
+    """True si le compte a un premium actif et non expire (ou a vie).
+    Les comptes super_admin ont automatiquement les avantages premium."""
+    if not user: return False
+    if user.get("role") == "super_admin": return True
+    if not user.get("premium"): return False
     exp = user.get("premium_expire")
     if exp is None and user.get("premium_type") == "fondateur": return True
     if not exp: return False
