@@ -1054,7 +1054,8 @@ def _connecter_user(conn, user, uid, ip_client=""):
         "pseudo": user.get("pseudo",""),
         "premium": est_premium_actif(user),
         "premium_type": user.get("premium_type"),
-        "role": admin_role
+        "role": admin_role,
+        "verifie": bool(user.get("verifie"))
     })
     notifier_statut(num_co, True)
     return num_co, est_admin, admin_role
@@ -1390,6 +1391,7 @@ def gerer_client(conn, addr):
                                 "pseudo":trouve.get("pseudo",""),
                                 "statut":trouve.get("statut","disponible") if est_contact else None,
                                 "cle_publique":trouve.get("cle_publique"),
+                                "verifie":bool(trouve.get("verifie")),
                                 "en_ligne":(trouve["numero"] in clients) if est_contact else False}})
 
                 # ─── PUBLIER CLE PUBLIQUE (chiffrement E2E) ──────────────
@@ -1481,7 +1483,8 @@ def gerer_client(conn, addr):
                                     "texte":texte,"heure":heure(),"chiffre":chiffre,
                                     "reply_to":reply_to,"msg_id":msg_id,
                                     "premium":est_premium_actif(exp_user),
-                                    "premium_type":exp_user.get("premium_type") if exp_user else None
+                                    "premium_type":exp_user.get("premium_type") if exp_user else None,
+                                    "verifie":bool(exp_user.get("verifie")) if exp_user else False
                                 })
                                 envoyer_srv(conn, {"ok":True,"livre":livre,"msg_id":msg_id})
                                 if livre: livrer(num_co, {"type":"livre","dest":dest,"msg_id":msg_id})
@@ -2368,6 +2371,21 @@ def gerer_client(conn, addr):
                             fs_update_user(uid_c, {"est_admin": False, "role": None})
                             fs_log_audit(num_co, "gerer_role", cible, "revoque")
                             envoyer_srv(conn, {"ok":True,"msg":f"Acces admin retire pour {cible}."})
+
+                elif act == "admin_verifier_compte":
+                    if not a_permission(admin_role, "admin_verifier_compte"):
+                        envoyer_srv(conn, {"ok":False,"msg":"Acces refuse. Seul le super-admin peut certifier un compte."})
+                    else:
+                        cible = p.get("numero","").strip()
+                        etat = bool(p.get("etat", True))
+                        uid_c, user_c = fs_get_user_by_numero(cible)
+                        if not uid_c:
+                            envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        else:
+                            fs_update_user(uid_c, {"verifie": etat})
+                            fs_log_audit(num_co, "verifier_compte", cible, f"verifie={etat}")
+                            verbe = "certifie ✅" if etat else "retire de la certification"
+                            envoyer_srv(conn, {"ok":True,"msg":f"{cible} {verbe}."})
 
                 elif act == "admin_reinitialiser_cle":
                     if not a_permission(admin_role, "admin_reinitialiser_cle"):

@@ -134,6 +134,7 @@ session = {
     "premium": False,
     "premium_type": None,
     "role": None,
+    "verifie": False,
 }
 
 sock_cli = None
@@ -414,17 +415,20 @@ def get_C():
 def get_theme():
     pt = session.get("premium_type")
     if session.get("role") == "super_admin":
-        return ("\033[91m", "Super Admin 👑", "Avantages premium automatiques")
+        c, lib, sous = "\033[91m", "Super Admin 👑", "Avantages premium automatiques"
     elif pt == "fondateur":
-        return ("\033[93m", "Fondateur 🏆", "Merci de faire partie de l'aventure")
+        c, lib, sous = "\033[93m", "Fondateur 🏆", "Merci de faire partie de l'aventure"
     elif pt == "beta":
-        return ("\033[92m", "Bêta Testeur 🧪", "Merci de tester TermChat avant tout le monde")
+        c, lib, sous = "\033[92m", "Bêta Testeur 🧪", "Merci de tester TermChat avant tout le monde"
     elif pt == "annuel":
-        return ("\033[95m", "Premium 💎", "Abonnement annuel · Support prio")
+        c, lib, sous = "\033[95m", "Premium 💎", "Abonnement annuel · Support prio"
     elif pt == "mensuel" or session.get("premium"):
-        return ("\033[96m", "Premium ✨", "Abonnement mensuel actif")
+        c, lib, sous = "\033[96m", "Premium ✨", "Abonnement mensuel actif"
     else:
-        return ("\033[97m", "Compte Gratuit", "")
+        c, lib, sous = "\033[97m", "Compte Gratuit", ""
+    if session.get("verifie"):
+        lib += " ✔️"
+    return (c, lib, sous)
 
 
 def fmt(o):
@@ -577,6 +581,8 @@ def afficher_entrant(p):
             badge_p = " ✨"
         else:
             badge_p = ""
+        if p.get("verifie"):
+            badge_p += " ✔️"
         print(f"\n{V}{B}[{h}] 💬 {p.get('de', '?')}{badge_p} ({num_exp}){Z}")
         if reply:
             print(f"{G}     ↩️  {reply[:40]}{Z}")
@@ -944,6 +950,7 @@ def _finaliser_connexion(rep):
             "premium": rep.get("premium", False),
             "premium_type": rep.get("premium_type"),
             "role": rep.get("role"),
+            "verifie": rep.get("verifie", False),
         }
     )
     global ma_cle_privee
@@ -1900,6 +1907,7 @@ def panel_admin():
         ("g", "🚩  Signalements", {"moderator"}),
         ("p", "🔑  Gérer les rôles admin", set()),
         ("k", "🔐  Réinitialiser une clé publique (E2E)", set()),
+        ("v", "✅  Certifier un compte (badge vérifié)", set()),
     ]
 
     def _admin_a_acces(roles_autorises):
@@ -2220,6 +2228,19 @@ def panel_admin():
             confirmation = input("Confirmer ? (o/n): ").strip().lower()
             if confirmation == "o":
                 envoyer_cli({"action": "admin_reinitialiser_cle", "numero": numero})
+                rep = attendre()
+                if rep and rep.get("ok"):
+                    succes(rep.get("msg", ""))
+                else:
+                    erreur(rep.get("msg", "?") if rep else "?")
+            entree()
+
+        elif choix == "v":
+            numero = input("Numéro du compte: ").strip()
+            print("  1 — Attribuer le badge vérifié  |  2 — Retirer le badge")
+            cv = input("Choix: ").strip()
+            if cv in ("1", "2"):
+                envoyer_cli({"action": "admin_verifier_compte", "numero": numero, "etat": cv == "1"})
                 rep = attendre()
                 if rep and rep.get("ok"):
                     succes(rep.get("msg", ""))
