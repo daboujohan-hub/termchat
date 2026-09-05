@@ -2427,20 +2427,97 @@ def gerer_client(conn, addr):
 #  DÉMARRAGE
 # ══════════════════════════════════════════════════════════
 def gerer_client_tls(conn, addr, ctx):
-    """Fait le handshake TLS dans le thread du client (pas dans la boucle
-    d'acceptation principale), avec un timeout court. Ainsi, une connexion
-    qui ne complete jamais le handshake (ex: sonde de sante Railway qui se
-    contente d'ouvrir/fermer le TCP sans TLS) ne bloque jamais l'acceptation
-    des autres clients ni ne fait planter le serveur."""
+    """
+    Handshake TLS dans le thread du client.
+    Journalisation détaillée pour diagnostiquer les connexions non-TLS.
+    """
+
+    ip, port = addr
+
+    print(
+        f"🔌 Nouvelle connexion TCP : {ip}:{port}"
+    )
+
     try:
         conn.settimeout(8)
-        conn = ctx.wrap_socket(conn, server_side=True)
+
+        print(
+            f"🔐 Handshake TLS en cours : {ip}:{port}"
+        )
+
+        conn = ctx.wrap_socket(
+            conn,
+            server_side=True
+        )
+
         conn.settimeout(None)
-    except Exception as e:
-        print(f"⚠️  Poignee de main TLS echouee avec {addr}: {e}")
-        try: conn.close()
-        except Exception: pass
+
+        cipher = conn.cipher()
+        cipher_name = cipher[0] if cipher else "inconnu"
+
+        print(
+            f"✅ TLS établi avec : {ip}:{port} "
+            f"| version={conn.version()} "
+            f"| cipher={cipher_name}"
+        )
+
+    except ssl.SSLError as e:
+        print(
+            f"⚠️ TLS refusé : {ip}:{port} "
+            f"| type={e.__class__.__name__} "
+            f"| erreur={e}"
+        )
+
+        if "WRONG_VERSION_NUMBER" in str(e):
+            print(
+                f"ℹ️ Connexion non-TLS détectée sur le port TLS "
+                f"depuis {ip}:{port}"
+            )
+
+        elif "UNEXPECTED_EOF" in str(e):
+            print(
+                f"ℹ️ Le client a fermé la connexion "
+                f"pendant le handshake TLS : {ip}:{port}"
+            )
+
+        try:
+            conn.close()
+        except Exception:
+            pass
+
         return
+
+    except socket.timeout:
+        print(
+            f"⏱️ Timeout handshake TLS : {ip}:{port}"
+        )
+
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+        return
+
+    except Exception as e:
+        print(
+            f"❌ Erreur TLS inattendue : {ip}:{port} "
+            f"| type={e.__class__.__name__} "
+            f"| erreur={e}"
+        )
+
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+        return
+
+    print(
+        f"📨 Passage au protocole TermChat : "
+        f"{ip}:{port}"
+    )
+
     gerer_client(conn, addr)
 
 def main():
