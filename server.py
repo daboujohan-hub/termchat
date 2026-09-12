@@ -954,7 +954,8 @@ def envoyer_srv(sock, paquet):
         data = (json.dumps(paquet, ensure_ascii=False) + "\n").encode()
         with envoi_lock:
             sock.sendall(data)
-    except Exception:
+    except Exception as e:
+        print(f"ECHEC ENVOI: {e} | paquet={paquet}")
         return False
     return True
 
