@@ -1101,6 +1101,7 @@ def gerer_client(conn, addr):
                     envoyer_srv(conn, {"ok":False,"msg":"Requête invalide."})
                     continue
                 act = p.get("action", "")
+                print(f"REQUETE RECUE: action={act} depuis {addr[0]}")
                 if not act:
                     envoyer_srv(conn, {"ok":False,"msg":"Requête invalide."})
                     continue
