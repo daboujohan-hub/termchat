@@ -2405,7 +2405,9 @@ def gerer_client(conn, addr):
                 else: envoyer_srv(conn, {"ok":False,"msg":f"Action inconnue: {act}"})
 
     except Exception as e:
+        import traceback
         print(f"⚠️  Erreur gerer_client: {e}")
+        traceback.print_exc()
     finally:
         if num_co:
             with lock:
