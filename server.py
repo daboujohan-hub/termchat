@@ -137,23 +137,23 @@ def preparer_certificat_tls():
         return False
 
 PAYS = {
-    "1": ("Cote d'Ivoire", "+225"),
-    "2": ("Senegal",       "+221"),
-    "3": ("Guinee",        "+224"),
-    "4": ("Burkina Faso",  "+226"),
-    "5": ("Ghana",         "+233"),
-    "6": ("Mali",          "+223"),
-    "7": ("Togo",          "+228"),
-    "8": ("Benin",         "+229"),
-    "9": ("Niger",         "+227"),
-    "10": ("Nigeria",      "+234"),
-    "11": ("Cameroun",     "+237"),
+    "1": ("Cote d'Ivoire", "TC01"),
+    "2": ("Senegal",       "TC02"),
+    "3": ("Guinee",        "TC03"),
+    "4": ("Burkina Faso",  "TC04"),
+    "5": ("Ghana",         "TC05"),
+    "6": ("Mali",          "TC06"),
+    "7": ("Togo",          "TC07"),
+    "8": ("Benin",         "TC08"),
+    "9": ("Niger",         "TC09"),
+    "10": ("Nigeria",      "TC10"),
+    "11": ("Cameroun",     "TC11"),
 }
 
-# Correspondance code pays ISO (retourne par la geolocalisation IP) -> prefixe telephonique
+# Correspondance code pays ISO (retourne par la geolocalisation IP) -> prefixe interne TermChat
 ISO_VERS_PREFIXE = {
-    "CI": "+225", "SN": "+221", "GN": "+224", "BF": "+226", "GH": "+233",
-    "ML": "+223", "TG": "+228", "BJ": "+229", "NE": "+227", "NG": "+234", "CM": "+237",
+    "CI": "TC01", "SN": "TC02", "GN": "TC03", "BF": "TC04", "GH": "TC05",
+    "ML": "TC06", "TG": "TC07", "BJ": "TC08", "NE": "TC09", "NG": "TC10", "CM": "TC11",
 }
 
 def verifier_pays_ip(ip, prefixe_declare):
@@ -1117,7 +1117,7 @@ def gerer_client(conn, addr):
                         continue
                     nom     = p.get("nom","").strip()
                     mdp     = p.get("mdp","").strip()
-                    prefixe = p.get("prefixe","+225").strip()
+                    prefixe = p.get("prefixe","TC01").strip()
                     couleur = p.get("couleur","cyan")
                     pseudo  = p.get("pseudo","").strip().lstrip("@")
                     email   = p.get("email","").strip().lower()
