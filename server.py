@@ -1507,6 +1507,34 @@ def gerer_client(conn, addr):
                                           "numero":num_co,"msg_id":msg_id,"emoji":emoji,"heure":heure()})
                             envoyer_srv(conn, {"ok":True})
 
+                elif act == "supprimer_message":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        avec = p.get("avec","").strip()
+                        msg_id = p.get("msg_id","").strip()
+                        if not avec or not msg_id:
+                            envoyer_srv(conn, {"ok":False,"msg":"Parametres manquants."})
+                        elif not db:
+                            envoyer_srv(conn, {"ok":False,"msg":"Service indisponible."})
+                        else:
+                            cle = "_".join(sorted([num_co, avec]))
+                            try:
+                                ref = db.collection("historique").document(cle).collection("messages").document(msg_id)
+                                doc = ref.get()
+                                if not doc.exists:
+                                    envoyer_srv(conn, {"ok":False,"msg":"Message introuvable."})
+                                elif doc.to_dict().get("de") != num_co:
+                                    envoyer_srv(conn, {"ok":False,"msg":"Tu ne peux supprimer que tes propres messages."})
+                                else:
+                                    ref.delete()
+                                    _, exp_user = fs_get_user_by_numero(num_co)
+                                    nom_de = exp_user.get("nom","?") if exp_user else "?"
+                                    livrer(avec, {"type":"message_supprime","msg_id":msg_id,"de":num_co,"nom_de":nom_de})
+                                    envoyer_srv(conn, {"ok":True,"msg":"Message supprime."})
+                            except Exception as e:
+                                envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
+
                 # ─── MARQUER LU ───────────────────────────
                 elif act == "marquer_lu":
                     if num_co:

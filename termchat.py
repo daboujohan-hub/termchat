@@ -717,6 +717,10 @@ def afficher_entrant(p):
         print(f"\n{J}{B}📩 Ajouté au groupe '{p.get('groupe', '?')}' !{Z}")
         print(f"{G}> {Z}", end="", flush=True)
 
+    elif t == "message_supprime":
+        print(f"\n{J}🗑️  {p.get('nom_de', 'Ton contact')} a supprimé un message.{Z}")
+        print(f"{G}> {Z}", end="", flush=True)
+
     elif t == "retire_groupe":
         beep()
         cles_groupes_cache.pop(p.get("id_groupe"), None)
@@ -1135,7 +1139,7 @@ def _ouvrir_chat(nd):
     expire_prochain = None
     print(
         f"\n{G}exit | /fichier | /vocal | /auto N | /repondre | /reaction "
-        f"| /rechercher | /effacer | /favori | /empreinte{Z}\n"
+        f"| /rechercher | /effacer | /supprimer | /favori | /empreinte{Z}\n"
     )
 
     while en_cours and session.get("connecte"):
@@ -1277,6 +1281,19 @@ def _ouvrir_chat(nd):
                     succes("Signalement envoyé à l'administration.")
                 else:
                     erreur(rep2.get("msg", "Erreur") if rep2 else "?")
+            continue
+
+        if texte == "/supprimer":
+            if not dernier_msg_id:
+                erreur("Aucun message à supprimer (envoie d'abord un message dans cette conversation).")
+                continue
+            envoyer_cli({"action": "supprimer_message", "msg_id": dernier_msg_id, "avec": nd})
+            rep2 = attendre()
+            if rep2 and rep2.get("ok"):
+                succes("Message supprimé pour tout le monde.")
+                dernier_msg_id = None
+            else:
+                erreur(rep2.get("msg", "?") if rep2 else "?")
             continue
 
         envoyer_cli({"action": "typing", "dest": nd, "actif": True})
