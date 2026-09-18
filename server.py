@@ -1038,6 +1038,16 @@ def _connecter_user(conn, user, uid, ip_client=""):
     admin_role = (user.get("role") or "super_admin") if est_admin else None
     non_lus   = fs_compter_non_lus(num_co)
 
+    # Controle continu (pas seulement a l'inscription) : le pays de connexion
+    # correspond-il toujours au prefixe declare ? Non bloquant (voyages, VPN,
+    # itinerance mobile sont legitimes) : juste journalise pour visibilite admin.
+    if ip_client and GEOIP_CHECK_ACTIF:
+        geo_ok, pays_reel = verifier_pays_ip(ip_client, user.get("prefixe", ""))
+        if not geo_ok:
+            fs_log_audit_complet(num_co, "connexion_pays_incoherent",
+                f"Connexion depuis {pays_reel or 'pays inconnu'}, prefixe declare {user.get('prefixe','?')}",
+                ip_client=ip_client)
+
     fs_update_user(uid, {"derniere_connexion": horodatage()})
 
     with lock:
@@ -2346,7 +2356,7 @@ def gerer_client(conn, addr):
                         alerts = []
                         if db:
                             try:
-                                docs = db.collection("audit_log")                                         .where(filter=FieldFilter("action", "in", ["echec_login", "echec_login_email", "session_kick_auto", "cle_publique_rejetee"]))                                         .order_by("heure", direction=firestore.Query.DESCENDING)                                         .limit(50).stream()
+                                docs = db.collection("audit_log")                                         .where(filter=FieldFilter("action", "in", ["echec_login", "echec_login_email", "session_kick_auto", "cle_publique_rejetee", "connexion_pays_incoherent"]))                                         .order_by("heure", direction=firestore.Query.DESCENDING)                                         .limit(50).stream()
                                 for d in docs:
                                     data = d.to_dict()
                                     sev = "CRITIQUE" if "echec" in data.get("action","") and "login" in data.get("action","") else "MOYEN"
