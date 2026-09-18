@@ -2486,6 +2486,46 @@ def gerer_client(conn, addr):
                             verbe = "certifie ✅" if etat else "retire de la certification"
                             envoyer_srv(conn, {"ok":True,"msg":f"{cible} {verbe}."})
 
+                elif act == "admin_creer_compte":
+                    if not a_permission(admin_role, "admin_creer_compte"):
+                        envoyer_srv(conn, {"ok":False,"msg":"Acces refuse. Seul le super-admin peut creer un compte admin."})
+                    else:
+                        nom    = p.get("nom","").strip()
+                        mdp    = p.get("mdp","").strip()
+                        pseudo = p.get("pseudo","").strip().lstrip("@")
+                        role_cible = p.get("role","moderator").strip()
+                        if not nom or len(nom) < 2 or len(nom) > 20:
+                            envoyer_srv(conn, {"ok":False,"msg":"Nom: 2 a 20 caracteres."})
+                        elif not mot_de_passe_est_fort(mdp):
+                            envoyer_srv(conn, {"ok":False,"msg":f"Mot de passe insuffisamment robuste (min {MIN_PASSWORD_LEN} caracteres, 3 classes)."})
+                        elif not RE_PSEUDO.match(pseudo):
+                            envoyer_srv(conn, {"ok":False,"msg":"Pseudo invalide: 3-20 caracteres, doit commencer par une lettre."})
+                        elif role_cible not in ROLES_ADMIN:
+                            envoyer_srv(conn, {"ok":False,"msg":f"Role invalide. Valeurs autorisees: {', '.join(ROLES_ADMIN)}."})
+                        elif fs_get_user_by_pseudo(pseudo)[1] is not None:
+                            envoyer_srv(conn, {"ok":False,"msg":f"Le pseudo @{pseudo} est deja pris."})
+                        else:
+                            numero = gen_numero("TC00")
+                            uid = gen_id("u_")
+                            user_data = {
+                                "nom": nom, "nom_lower": nom.lower(), "numero": numero,
+                                "pseudo": pseudo, "pseudo_lower": pseudo.lower(),
+                                "email": "", "email_lower": None,
+                                "mdp": hacher(mdp), "pays": "Administration", "prefixe": "TC00",
+                                "bio": "", "couleur": "cyan", "statut": "disponible",
+                                "inscription": horodatage(), "derniere_connexion": None,
+                                "favoris": [], "bloque": [], "est_admin": True, "role": role_cible, "pin": None,
+                                "cle_publique": None,
+                                "premium": False, "premium_expire": None,
+                                "premium_type": None, "active_par": None,
+                                "totp_actif": False, "totp_secret": None, "totp_recovery_codes": [],
+                                "pays_incoherent": False, "pays_detecte_ip": None
+                            }
+                            fs_save_user(uid, user_data)
+                            fs_log_audit(num_co, "creer_compte_admin", numero, f"role={role_cible}")
+                            envoyer_srv(conn, {"ok":True,"numero":numero,"nom":nom,"pseudo":pseudo,
+                                "msg":f"Compte admin cree: {numero} (@{pseudo}, role: {role_cible}). Note bien ce numero pour le communiquer."})
+
                 elif act == "admin_reinitialiser_cle":
                     if not a_permission(admin_role, "admin_reinitialiser_cle"):
                         envoyer_srv(conn, {"ok":False,"msg":"Acces refuse. Seul le super-admin peut reinitialiser une cle publique."})

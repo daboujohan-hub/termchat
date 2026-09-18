@@ -1925,6 +1925,7 @@ def panel_admin():
         ("p", "🔑  Gérer les rôles admin", set()),
         ("k", "🔐  Réinitialiser une clé publique (E2E)", set()),
         ("v", "✅  Certifier un compte (badge vérifié)", set()),
+        ("n", "🆕  Créer un compte admin (préfixe TC00)", set()),
     ]
 
     def _admin_a_acces(roles_autorises):
@@ -2261,6 +2262,27 @@ def panel_admin():
                 rep = attendre()
                 if rep and rep.get("ok"):
                     succes(rep.get("msg", ""))
+                else:
+                    erreur(rep.get("msg", "?") if rep else "?")
+            entree()
+
+        elif choix == "n":
+            print(f"{J}Création directe d'un compte admin (préfixe TC00, pas d'inscription publique){Z}")
+            nom_c = input("Nom: ").strip()
+            pseudo_c = input("Pseudo (@): ").strip()
+            mdp_c = input("Mot de passe (min 12 car., 3 classes): ").strip()
+            print("  1 — super_admin  |  2 — moderator  |  3 — payment_admin")
+            cr = input("Rôle: ").strip()
+            roles_map_n = {"1": "super_admin", "2": "moderator", "3": "payment_admin"}
+            if cr in roles_map_n:
+                envoyer_cli({
+                    "action": "admin_creer_compte", "nom": nom_c, "pseudo": pseudo_c,
+                    "mdp": mdp_c, "role": roles_map_n[cr]
+                })
+                rep = attendre()
+                if rep and rep.get("ok"):
+                    succes(rep.get("msg", ""))
+                    print(f"{V}Numéro attribué : {rep.get('numero')}{Z}")
                 else:
                     erreur(rep.get("msg", "?") if rep else "?")
             entree()
