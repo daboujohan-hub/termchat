@@ -48,7 +48,7 @@ ALLOW_INLINE_MEDIA = os.environ.get("ALLOW_INLINE_MEDIA", "0") == "1"
 ALLOW_ACCOUNT_DELETION = os.environ.get("ALLOW_ACCOUNT_DELETION", "0") == "1"
 EDUMAP_ADMIN_PASSWORD = os.environ.get("EDUMAP_ADMIN_PASSWORD", "")
 EDUMAP_STORAGE_BUCKET = os.environ.get("EDUMAP_STORAGE_BUCKET", "")
-EDUMAP_MAX_VIDEO_BYTES = int(os.environ.get("EDUMAP_MAX_VIDEO_BYTES", str(20 * 1024 * 1024)))
+EDUMAP_MAX_PHOTO_BYTES = int(os.environ.get("EDUMAP_MAX_PHOTO_BYTES", str(600 * 1024)))
 MIN_PASSWORD_LEN = int(os.environ.get("MIN_PASSWORD_LEN", "12"))
 MAX_MESSAGE_LEN_FREE = int(os.environ.get("MAX_MESSAGE_LEN_FREE", "150"))
 MAX_MESSAGE_LEN_PREMIUM = int(os.environ.get("MAX_MESSAGE_LEN_PREMIUM", "4000"))
@@ -1474,8 +1474,6 @@ def gerer_client(conn, addr):
                     mdp_fourni = p.get("mot_de_passe","")
                     if not EDUMAP_ADMIN_PASSWORD or mdp_fourni != EDUMAP_ADMIN_PASSWORD:
                         envoyer_srv(conn, {"ok":False,"msg":"Mot de passe admin incorrect."})
-                    elif edumap_bucket is None:
-                        envoyer_srv(conn, {"ok":False,"msg":"Stockage photos/videos indisponible cote serveur."})
                     else:
                         nom = (p.get("nom") or "").strip()
                         quartier = (p.get("quartier") or "").strip()
@@ -1488,28 +1486,16 @@ def gerer_client(conn, addr):
                             envoyer_srv(conn, {"ok":False,"msg":"Nom, quartier et position GPS requis."})
                         else:
                             try:
-                                verifier_budget_stockage()
                                 ecole_id = gen_id("ecole_")
-                                photo_url = None
-                                video_url = None
+                                photo_b64 = None
                                 photo_c64 = p.get("photo")
                                 if photo_c64:
-                                    data, _ = decoder_base64_strict(photo_c64, p.get("photo_taille",0), MAX_UPLOAD_BYTES)
-                                    blob = edumap_bucket.blob(f"edumap/{ecole_id}_photo.jpg")
-                                    blob.upload_from_string(data, content_type="image/jpeg")
-                                    blob.make_public()
-                                    photo_url = blob.public_url
-                                video_c64 = p.get("video")
-                                if video_c64:
-                                    data, _ = decoder_base64_strict(video_c64, p.get("video_taille",0), EDUMAP_MAX_VIDEO_BYTES)
-                                    blob = edumap_bucket.blob(f"edumap/{ecole_id}_video.mp4")
-                                    blob.upload_from_string(data, content_type="video/mp4")
-                                    blob.make_public()
-                                    video_url = blob.public_url
+                                    data, _ = decoder_base64_strict(photo_c64, p.get("photo_taille",0), EDUMAP_MAX_PHOTO_BYTES)
+                                    photo_b64 = base64.b64encode(data).decode("ascii")
                                 ecole = {
                                     "nom": nom, "quartier": quartier,
                                     "lat": lat, "lng": lng,
-                                    "photo_url": photo_url, "video_url": video_url,
+                                    "photo_base64": photo_b64,
                                     "ajoute_le": horodatage(),
                                 }
                                 db.collection("ecoles_edumap").document(ecole_id).set(ecole)
