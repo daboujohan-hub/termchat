@@ -44,7 +44,7 @@ echo "   $CLIENT_URL"
 echo ""
 
 printf "Continuer l'installation ? [O/n] : "
-read -r CONFIRM
+read -r CONFIRM < /dev/tty
 
 case "$CONFIRM" in
     n|N|non|NON|Non)
