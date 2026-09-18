@@ -24,7 +24,7 @@ import pyotp
 # Firebase Admin SDK
 try:
     import firebase_admin
-    from firebase_admin import credentials, firestore
+    from firebase_admin import credentials, firestore, storage
     from google.cloud.firestore_v1.base_query import FieldFilter
     FIREBASE_OK = True
 except ImportError:
@@ -46,6 +46,9 @@ GEOIP_CHECK_ACTIF = os.environ.get("GEOIP_CHECK_ACTIF", "1") == "1"
 ALLOW_LEGACY_SHA256_LOGIN = os.environ.get("ALLOW_LEGACY_SHA256_LOGIN", "0") == "1"
 ALLOW_INLINE_MEDIA = os.environ.get("ALLOW_INLINE_MEDIA", "0") == "1"
 ALLOW_ACCOUNT_DELETION = os.environ.get("ALLOW_ACCOUNT_DELETION", "0") == "1"
+EDUMAP_ADMIN_PASSWORD = os.environ.get("EDUMAP_ADMIN_PASSWORD", "")
+EDUMAP_STORAGE_BUCKET = os.environ.get("EDUMAP_STORAGE_BUCKET", "")
+EDUMAP_MAX_VIDEO_BYTES = int(os.environ.get("EDUMAP_MAX_VIDEO_BYTES", str(20 * 1024 * 1024)))
 MIN_PASSWORD_LEN = int(os.environ.get("MIN_PASSWORD_LEN", "12"))
 MAX_MESSAGE_LEN_FREE = int(os.environ.get("MAX_MESSAGE_LEN_FREE", "150"))
 MAX_MESSAGE_LEN_PREMIUM = int(os.environ.get("MAX_MESSAGE_LEN_PREMIUM", "4000"))
@@ -183,28 +186,47 @@ STATUTS = ["disponible", "occupe", "ne_pas_deranger", "absent"]
 #  FIREBASE FIRESTORE
 # ══════════════════════════════════════════════════════════
 db = None
+edumap_bucket = None
 
 def init_firebase():
-    global db
+    global db, edumap_bucket
     if not FIREBASE_OK:
         print("⚠️  Firebase non disponible")
         return False
     try:
+        project_id_detecte = None
         if FIREBASE_CREDS:
             try:
                 creds_dict = json.loads(FIREBASE_CREDS)
                 cred = credentials.Certificate(creds_dict)
+                project_id_detecte = creds_dict.get("project_id")
             except Exception as e:
                 print(f"⚠️  FIREBASE_CREDS invalide: {e}")
                 return False
         elif os.path.exists("firebase-credentials.json"):
             cred = credentials.Certificate("firebase-credentials.json")
+            try:
+                with open("firebase-credentials.json") as _f:
+                    project_id_detecte = json.load(_f).get("project_id")
+            except Exception:
+                project_id_detecte = None
         else:
             print("⚠️  Pas de credentials Firebase")
             return False
+        bucket_name = EDUMAP_STORAGE_BUCKET or (f"{project_id_detecte}.appspot.com" if project_id_detecte else None)
         if not firebase_admin._apps:
-            firebase_admin.initialize_app(cred)
+            if bucket_name:
+                firebase_admin.initialize_app(cred, {"storageBucket": bucket_name})
+            else:
+                firebase_admin.initialize_app(cred)
         db = firestore.client()
+        if bucket_name:
+            try:
+                edumap_bucket = storage.bucket()
+                print(f"✅ Firebase Storage connecté (bucket: {bucket_name})")
+            except Exception as e:
+                edumap_bucket = None
+                print(f"⚠️  Firebase Storage indisponible: {e}")
         print("✅ Firebase Firestore connecté !")
         return True
     except Exception as e:
@@ -1434,6 +1456,67 @@ def gerer_client(conn, addr):
                     if num_co:
                         convs = fs_get_conversations(num_co)
                         envoyer_srv(conn, {"ok":True,"conversations":convs})
+
+                # ─── EDUMAP (annuaire d'\''ecoles) ────────
+                elif act == "edumap_lister_ecoles":
+                    try:
+                        docs = db.collection("ecoles_edumap").stream()
+                        ecoles = []
+                        for d in docs:
+                            e = d.to_dict()
+                            e["id"] = d.id
+                            ecoles.append(e)
+                        envoyer_srv(conn, {"ok":True,"ecoles":ecoles})
+                    except Exception as e:
+                        envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
+
+                elif act == "edumap_ajouter_ecole":
+                    mdp_fourni = p.get("mot_de_passe","")
+                    if not EDUMAP_ADMIN_PASSWORD or mdp_fourni != EDUMAP_ADMIN_PASSWORD:
+                        envoyer_srv(conn, {"ok":False,"msg":"Mot de passe admin incorrect."})
+                    elif edumap_bucket is None:
+                        envoyer_srv(conn, {"ok":False,"msg":"Stockage photos/videos indisponible cote serveur."})
+                    else:
+                        nom = (p.get("nom") or "").strip()
+                        quartier = (p.get("quartier") or "").strip()
+                        try:
+                            lat = float(p.get("lat"))
+                            lng = float(p.get("lng"))
+                        except (TypeError, ValueError):
+                            lat = lng = None
+                        if not nom or not quartier or lat is None or lng is None:
+                            envoyer_srv(conn, {"ok":False,"msg":"Nom, quartier et position GPS requis."})
+                        else:
+                            try:
+                                verifier_budget_stockage()
+                                ecole_id = gen_id("ecole_")
+                                photo_url = None
+                                video_url = None
+                                photo_c64 = p.get("photo")
+                                if photo_c64:
+                                    data, _ = decoder_base64_strict(photo_c64, p.get("photo_taille",0), MAX_UPLOAD_BYTES)
+                                    blob = edumap_bucket.blob(f"edumap/{ecole_id}_photo.jpg")
+                                    blob.upload_from_string(data, content_type="image/jpeg")
+                                    blob.make_public()
+                                    photo_url = blob.public_url
+                                video_c64 = p.get("video")
+                                if video_c64:
+                                    data, _ = decoder_base64_strict(video_c64, p.get("video_taille",0), EDUMAP_MAX_VIDEO_BYTES)
+                                    blob = edumap_bucket.blob(f"edumap/{ecole_id}_video.mp4")
+                                    blob.upload_from_string(data, content_type="video/mp4")
+                                    blob.make_public()
+                                    video_url = blob.public_url
+                                ecole = {
+                                    "nom": nom, "quartier": quartier,
+                                    "lat": lat, "lng": lng,
+                                    "photo_url": photo_url, "video_url": video_url,
+                                    "ajoute_le": horodatage(),
+                                }
+                                db.collection("ecoles_edumap").document(ecole_id).set(ecole)
+                                fs_log_audit_complet(num_co or "admin_edumap", "edumap_ajout_ecole", nom, ip_client=addr[0])
+                                envoyer_srv(conn, {"ok":True,"id":ecole_id,"msg":f"Ecole '{nom}' ajoutee."})
+                            except Exception as e:
+                                envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
 
                 # ─── MESSAGE ──────────────────────────────
                 elif act == "message":
