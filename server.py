@@ -1535,12 +1535,13 @@ def gerer_client(conn, addr):
                                 envoyer_srv(conn, {"ok":False,"msg":"Message trop long (max 150 caracteres en gratuit). Passe premium pour debloquer."})
                                 continue
                             cle_verif = "_".join(sorted([num_co, dest]))
-                            nouveau_contact = db.collection("historique").document(cle_verif).get().exists == False if db else False
+                            deja_premium = est_premium_actif(exp_user)
+                            nouveau_contact = (db.collection("historique").document(cle_verif).get().exists == False) if (db and not deja_premium) else False
                             if not dest_user:
                                 envoyer_srv(conn, {"ok":False,"msg":"Destinataire introuvable."})
                             elif num_co in dest_user.get("bloque",[]):
                                 envoyer_srv(conn, {"ok":False,"msg":"Tu es bloque par cet utilisateur."})
-                            elif nouveau_contact and not est_premium_actif(exp_user) and fs_compter_contacts_distincts(num_co) >= 5:
+                            elif nouveau_contact and not deja_premium and fs_compter_contacts_distincts(num_co) >= 5:
                                 envoyer_srv(conn, {"ok":False,"msg":"Limite de 5 contacts atteinte en gratuit. Passe premium pour debloquer."})
                             else:
                                 cle    = "_".join(sorted([num_co, dest]))
@@ -1557,7 +1558,6 @@ def gerer_client(conn, addr):
                                             msg["expire_a"] = time.time()+expire_s_int
                                     except Exception:
                                         pass
-                                fs_save_message(cle, msg)
                                 nom_exp = exp_user["nom"] if exp_user and exp_user.get("nom") else "?"
                                 livre = livrer(dest, {
                                     "type":"message","de":nom_exp,"numero":num_co,
@@ -1569,6 +1569,7 @@ def gerer_client(conn, addr):
                                 })
                                 envoyer_srv(conn, {"ok":True,"livre":livre,"msg_id":msg_id})
                                 if livre: livrer(num_co, {"type":"livre","dest":dest,"msg_id":msg_id})
+                                fs_save_message(cle, msg)
 
                 # ─── RÉACTION ─────────────────────────────
                 elif act == "reaction":
@@ -1873,12 +1874,12 @@ def gerer_client(conn, addr):
                                     "chiffre": chiffre_f, "taille": taille,
                                     "stockage": "local_temporaire"
                                 }
-                                fs_save_message(cle, msg)
                                 nom_exp = exp_user.get("nom","?") if exp_user else "?"
                                 livre = livrer(dest, {"type":"fichier","de":nom_exp,
                                     "numero":num_co,"nom_fichier":safe_nom,"contenu":c64,
                                     "taille":taille,"heure":heure(),"msg_id":msg_id,"chiffre":chiffre_f})
                                 envoyer_srv(conn, {"ok":True,"livre":livre,"msg_id":msg_id,"msg":f"'{safe_nom}' envoyé."})
+                                fs_save_message(cle, msg)
                             except Exception as e:
                                 envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
 
@@ -1917,12 +1918,12 @@ def gerer_client(conn, addr):
                                     "chiffre": chiffre_v, "taille": taille, "duree": duree,
                                     "stockage": "local_temporaire"
                                 }
-                                fs_save_message(cle, msg)
                                 nom_exp = exp_user.get("nom","?") if exp_user else "?"
                                 livre = livrer(dest, {"type":"vocal","de":nom_exp,
                                     "numero":num_co,"nom_fichier":nom_fich,"contenu":c64,
                                     "duree":duree,"taille":taille,"heure":heure(),"msg_id":msg_id,"chiffre":chiffre_v})
                                 envoyer_srv(conn, {"ok":True,"livre":livre,"msg_id":msg_id,"msg":"Vocal envoyé!"})
+                                fs_save_message(cle, msg)
                             except Exception as e:
                                 envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
 
@@ -2054,11 +2055,11 @@ def gerer_client(conn, addr):
                             chiffre_g = bool(p.get("chiffre", False))
                             epoch_g = p.get("epoch")
                             msg  = {"de":num_co,"nom":eu.get("nom","?") if eu else "?","texte":texte,"heure":horodatage(),"reply_to":reply,"chiffre":chiffre_g,"epoch":epoch_g}
-                            fs_save_msg_groupe(gid, msg)
                             for m in groupe.get("membres",[]):
                                 if m!=num_co: livrer(m, {"type":"msg_groupe","groupe":groupe.get("nom","?"),"id_groupe":gid,
                                     "de":eu.get("nom","?") if eu else "?","numero":num_co,"texte":texte,"heure":heure(),"reply_to":reply,"chiffre":chiffre_g,"epoch":epoch_g})
                             envoyer_srv(conn, {"ok":True})
+                            fs_save_msg_groupe(gid, msg)
                         else: envoyer_srv(conn, {"ok":False,"msg":"Groupe introuvable ou non membre."})
 
                 elif act == "mes_groupes":
