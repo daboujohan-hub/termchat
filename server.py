@@ -843,6 +843,83 @@ def fs_get_stats():
     except Exception as e:
         print(f"Firestore erreur: {e}"); return {}
 
+def fs_save_canal(cid, data):
+    if not db or not cid: return
+    try: db.collection("canaux").document(cid).set(data, merge=True)
+    except Exception as e: print(f"Firestore erreur: {e}")
+
+def fs_get_canal(cid):
+    if not db or not cid: return None
+    try:
+        doc = db.collection("canaux").document(cid).get()
+        return doc.to_dict() if doc.exists else None
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return None
+
+def fs_lister_canaux():
+    if not db: return []
+    try:
+        return [(doc.id, doc.to_dict()) for doc in db.collection("canaux").stream()]
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return []
+
+def fs_mes_canaux(numero):
+    if not db: return []
+    try:
+        docs = db.collection("canaux")\
+                 .where(filter=FieldFilter("abonnes", "array_contains", numero)).stream()
+        return [(doc.id, doc.to_dict()) for doc in docs]
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return []
+
+def fs_save_post_canal(cid, post):
+    if not db or not cid: return None
+    try:
+        ref = db.collection("canaux").document(cid).collection("posts").document()
+        post = dict(post); post["id"] = ref.id
+        ref.set(post)
+        return ref.id
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return None
+
+def fs_get_posts_canal(cid):
+    if not db or not cid: return []
+    try:
+        docs = db.collection("canaux").document(cid).collection("posts")\
+                 .order_by("heure", direction=firestore.Query.DESCENDING).stream()
+        return [doc.to_dict() for doc in docs]
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return []
+
+def fs_get_post_canal(cid, post_id):
+    if not db or not cid or not post_id: return None
+    try:
+        doc = db.collection("canaux").document(cid).collection("posts").document(post_id).get()
+        return doc.to_dict() if doc.exists else None
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return None
+
+def fs_save_commentaire_canal(cid, post_id, com):
+    if not db or not cid or not post_id: return None
+    try:
+        ref = db.collection("canaux").document(cid).collection("posts")\
+                 .document(post_id).collection("commentaires").document()
+        com = dict(com); com["id"] = ref.id
+        ref.set(com)
+        return ref.id
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return None
+
+def fs_get_commentaires_canal(cid, post_id):
+    if not db or not cid or not post_id: return []
+    try:
+        docs = db.collection("canaux").document(cid).collection("posts")\
+                 .document(post_id).collection("commentaires")\
+                 .order_by("heure", direction=firestore.Query.ASCENDING).stream()
+        return [doc.to_dict() for doc in docs]
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return []
+
 # ══════════════════════════════════════════════════════════
 #  FICHIERS LOCAUX (temporaires)
 # ══════════════════════════════════════════════════════════
@@ -2083,6 +2160,153 @@ def gerer_client(conn, addr):
                             if db: db.collection("groupes").document(gid).update({"epingle":texte})
                             for m in groupe.get("membres",[]): livrer(m, {"type":"epingle","groupe":groupe.get("nom","?"),"texte":texte,"heure":heure()})
                             envoyer_srv(conn, {"ok":True,"msg":"Message epingle!"})
+
+                # ─── CANAUX ─────────────────────────────────
+                elif act == "canal_creer":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        nom = p.get("nom","").strip()
+                        description = p.get("description","").strip()
+                        if not nom:
+                            envoyer_srv(conn, {"ok":False,"msg":"Nom du canal requis."})
+                        else:
+                            _, u = fs_get_user_by_numero(num_co)
+                            cid = gen_id("can_")
+                            fs_save_canal(cid, {
+                                "id": cid, "nom": nom, "description": description,
+                                "createur": num_co, "createur_nom": u.get("nom","?") if u else "?",
+                                "abonnes": [num_co], "date_creation": horodatage()
+                            })
+                            envoyer_srv(conn, {"ok":True,"id":cid})
+
+                elif act == "canal_lister":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        canaux = []
+                        for cid, c in fs_lister_canaux():
+                            canaux.append({
+                                "id": cid, "nom": c.get("nom","?"), "description": c.get("description",""),
+                                "createur_nom": c.get("createur_nom","?"), "createur": c.get("createur"),
+                                "nb_abonnes": len(c.get("abonnes",[])), "abonne": num_co in c.get("abonnes",[])
+                            })
+                        envoyer_srv(conn, {"ok":True,"canaux":canaux})
+
+                elif act == "mes_canaux":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        canaux = []
+                        for cid, c in fs_mes_canaux(num_co):
+                            canaux.append({
+                                "id": cid, "nom": c.get("nom","?"), "description": c.get("description",""),
+                                "createur_nom": c.get("createur_nom","?"), "createur": c.get("createur"),
+                                "nb_abonnes": len(c.get("abonnes",[]))
+                            })
+                        envoyer_srv(conn, {"ok":True,"canaux":canaux})
+
+                elif act == "canal_abonner":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        cid = p.get("canal_id","").strip()
+                        canal = fs_get_canal(cid)
+                        if not canal:
+                            envoyer_srv(conn, {"ok":False,"msg":"Canal introuvable."})
+                        else:
+                            abonnes = canal.get("abonnes",[])
+                            if num_co not in abonnes:
+                                abonnes.append(num_co)
+                                fs_save_canal(cid, {"abonnes": abonnes})
+                            envoyer_srv(conn, {"ok":True})
+
+                elif act == "canal_desabonner":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        cid = p.get("canal_id","").strip()
+                        canal = fs_get_canal(cid)
+                        if not canal:
+                            envoyer_srv(conn, {"ok":False,"msg":"Canal introuvable."})
+                        elif canal.get("createur") == num_co:
+                            envoyer_srv(conn, {"ok":False,"msg":"Le createur ne peut pas se desabonner de son propre canal."})
+                        else:
+                            abonnes = [a for a in canal.get("abonnes",[]) if a != num_co]
+                            fs_save_canal(cid, {"abonnes": abonnes})
+                            envoyer_srv(conn, {"ok":True})
+
+                elif act == "canal_poster":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        cid = p.get("canal_id","").strip()
+                        texte = p.get("texte","").strip()
+                        canal = fs_get_canal(cid)
+                        if not canal:
+                            envoyer_srv(conn, {"ok":False,"msg":"Canal introuvable."})
+                        elif canal.get("createur") != num_co:
+                            envoyer_srv(conn, {"ok":False,"msg":"Seul le createur du canal peut poster."})
+                        elif not texte:
+                            envoyer_srv(conn, {"ok":False,"msg":"Texte requis."})
+                        else:
+                            post_id = fs_save_post_canal(cid, {"texte": texte, "heure": horodatage(), "de": num_co})
+                            for ab in canal.get("abonnes",[]):
+                                if ab != num_co:
+                                    livrer(ab, {"type":"canal_post","canal_id":cid,"canal_nom":canal.get("nom","?"),
+                                        "post_id":post_id,"texte":texte,"heure":heure()})
+                            envoyer_srv(conn, {"ok":True,"post_id":post_id})
+
+                elif act == "canal_posts":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        cid = p.get("canal_id","").strip()
+                        canal = fs_get_canal(cid)
+                        if not canal:
+                            envoyer_srv(conn, {"ok":False,"msg":"Canal introuvable."})
+                        else:
+                            envoyer_srv(conn, {"ok":True,"posts":fs_get_posts_canal(cid)})
+
+                elif act == "canal_commenter":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        cid = p.get("canal_id","").strip()
+                        post_id = p.get("post_id","").strip()
+                        texte = p.get("texte","").strip()
+                        canal = fs_get_canal(cid)
+                        post = fs_get_post_canal(cid, post_id) if canal else None
+                        if not canal or not post:
+                            envoyer_srv(conn, {"ok":False,"msg":"Canal ou publication introuvable."})
+                        elif num_co not in canal.get("abonnes",[]):
+                            envoyer_srv(conn, {"ok":False,"msg":"Seuls les abonnes peuvent commenter."})
+                        elif not texte:
+                            envoyer_srv(conn, {"ok":False,"msg":"Texte requis."})
+                        else:
+                            _, u = fs_get_user_by_numero(num_co)
+                            fs_save_commentaire_canal(cid, post_id, {
+                                "de": num_co, "nom": u.get("nom","?") if u else "?",
+                                "texte": texte, "heure": horodatage()
+                            })
+                            createur = canal.get("createur")
+                            if createur and createur != num_co:
+                                livrer(createur, {"type":"canal_commentaire","canal_id":cid,"canal_nom":canal.get("nom","?"),
+                                    "post_id":post_id,"de":u.get("nom","?") if u else "?","texte":texte,"heure":heure()})
+                            envoyer_srv(conn, {"ok":True})
+
+                elif act == "canal_commentaires":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        cid = p.get("canal_id","").strip()
+                        post_id = p.get("post_id","").strip()
+                        canal = fs_get_canal(cid)
+                        post = fs_get_post_canal(cid, post_id) if canal else None
+                        if not canal or not post:
+                            envoyer_srv(conn, {"ok":False,"msg":"Canal ou publication introuvable."})
+                        else:
+                            envoyer_srv(conn, {"ok":True,"commentaires":fs_get_commentaires_canal(cid, post_id)})
 
                 # ─── PREMIUM (abonnement) ──────────────────
                 elif act == "verifier_mon_abonnement":
