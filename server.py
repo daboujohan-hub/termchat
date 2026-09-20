@@ -1574,6 +1574,8 @@ def gerer_client(conn, addr):
                         for d in docs:
                             e = d.to_dict()
                             e["id"] = d.id
+                            if "photos_base64" not in e and e.get("photo_base64"):
+                                e["photos_base64"] = [e["photo_base64"]]
                             ecoles.append(e)
                         envoyer_srv(conn, {"ok":True,"ecoles":ecoles})
                     except Exception as e:
@@ -1595,21 +1597,26 @@ def gerer_client(conn, addr):
                             envoyer_srv(conn, {"ok":False,"msg":"Nom, quartier et position GPS requis."})
                         else:
                             try:
-                                ecole_id = gen_id("ecole_")
-                                photo_b64 = None
-                                photo_c64 = p.get("photo")
-                                if photo_c64:
-                                    data, _ = decoder_base64_strict(photo_c64, p.get("photo_taille",0), EDUMAP_MAX_PHOTO_BYTES)
-                                    photo_b64 = base64.b64encode(data).decode("ascii")
-                                ecole = {
-                                    "nom": nom, "quartier": quartier,
-                                    "lat": lat, "lng": lng,
-                                    "photo_base64": photo_b64,
-                                    "ajoute_le": horodatage(),
-                                }
-                                db.collection("ecoles_edumap").document(ecole_id).set(ecole)
-                                fs_log_audit_complet(num_co or "admin_edumap", "edumap_ajout_ecole", nom, ip_client=addr[0])
-                                envoyer_srv(conn, {"ok":True,"id":ecole_id,"msg":f"Ecole '{nom}' ajoutee."})
+                                photos = p.get("photos") or []
+                                tailles = p.get("photos_tailles") or []
+                                if len(photos) > 5:
+                                    envoyer_srv(conn, {"ok":False,"msg":"5 photos maximum."})
+                                else:
+                                    ecole_id = gen_id("ecole_")
+                                    photos_b64 = []
+                                    for i, photo_c64 in enumerate(photos):
+                                        taille = tailles[i] if i < len(tailles) else 0
+                                        data, _ = decoder_base64_strict(photo_c64, taille, EDUMAP_MAX_PHOTO_BYTES)
+                                        photos_b64.append(base64.b64encode(data).decode("ascii"))
+                                    ecole = {
+                                        "nom": nom, "quartier": quartier,
+                                        "lat": lat, "lng": lng,
+                                        "photos_base64": photos_b64,
+                                        "ajoute_le": horodatage(),
+                                    }
+                                    db.collection("ecoles_edumap").document(ecole_id).set(ecole)
+                                    fs_log_audit_complet(num_co or "admin_edumap", "edumap_ajout_ecole", nom, ip_client=addr[0])
+                                    envoyer_srv(conn, {"ok":True,"id":ecole_id,"msg":f"Ecole '{nom}' ajoutee."})
                             except Exception as e:
                                 envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
 
