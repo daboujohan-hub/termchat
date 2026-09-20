@@ -846,12 +846,26 @@ def inscrire():
         erreur("Les mots de passe ne correspondent pas.")
         entree()
         return
-    print(f"\n{B}Choisis ton pays:{Z}\n")
-    for k, (flag_nom, prefixe) in PAYS.items():
-        print(f"  {k} — {flag_nom}  ({prefixe})")
-    choix_pays = input("\nNuméro du pays: ").strip()
-    if choix_pays not in PAYS:
-        choix_pays = "1"
+    envoyer_cli({"action": "detecter_pays"})
+    rep_pays = attendre(3)
+    choix_pays = None
+    if rep_pays and rep_pays.get("ok"):
+        nom_detecte = rep_pays.get("nom_pays", "?")
+        print(f"\n{V}🌍 Pays détecté automatiquement : {nom_detecte}{Z}")
+        rep_confirm = input(
+            f"{J}Presse Entrée pour confirmer, ou tape un numéro pour choisir un autre pays :{Z} "
+        ).strip()
+        if not rep_confirm:
+            choix_pays = rep_pays.get("cle_pays")
+        elif rep_confirm in PAYS:
+            choix_pays = rep_confirm
+    if not choix_pays:
+        print(f"\n{B}Choisis ton pays:{Z}\n")
+        for k, (flag_nom, prefixe) in PAYS.items():
+            print(f"  {k} — {flag_nom}  ({prefixe})")
+        choix_pays = input("\nNuméro du pays: ").strip()
+        if choix_pays not in PAYS:
+            choix_pays = "1"
     _, prefixe = PAYS[choix_pays]
     envoyer_cli(
         {
@@ -1137,6 +1151,8 @@ def _ouvrir_chat(nd):
     print(f"\n{V}✅ {u.get('nom', '?')} — {st}{Z}")
     dernier_msg_id = None
     expire_prochain = None
+    dernier_envoi_ts = 0.0
+    rafale_avertie = False
     print(
         f"\n{G}exit | /fichier | /vocal | /auto N | /repondre | /reaction "
         f"| /rechercher | /effacer | /supprimer | /favori | /empreinte{Z}\n"
@@ -1295,6 +1311,16 @@ def _ouvrir_chat(nd):
             else:
                 erreur(rep2.get("msg", "?") if rep2 else "?")
             continue
+
+        maintenant = time.time()
+        if maintenant - dernier_envoi_ts < 0.5:
+            if not rafale_avertie:
+                print(f"\n{J}⚠️  Envois rapprochés détectés (copier-coller multi-lignes ?) — ralentissement automatique pour éviter de saturer le serveur.{Z}")
+                rafale_avertie = True
+            time.sleep(1.2)
+        else:
+            rafale_avertie = False
+        dernier_envoi_ts = time.time()
 
         envoyer_cli({"action": "typing", "dest": nd, "actif": True})
         te = chiffrer(texte, cle_chat) if chiffrer_msgs else texte

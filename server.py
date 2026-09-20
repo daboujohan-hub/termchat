@@ -1218,6 +1218,28 @@ def gerer_client(conn, addr):
                     envoyer_srv(conn, {"ok":False,"msg":"Trop de requêtes. Réessaie plus tard."})
                     continue
 
+                # ─── DETECTION PAYS (pre-remplissage inscription) ──
+                if act == "detecter_pays":
+                    code_iso = None
+                    try:
+                        import urllib.request, json as _json
+                        with urllib.request.urlopen(f"https://api.country.is/{addr[0]}", timeout=3) as resp:
+                            data = _json.loads(resp.read().decode())
+                        code_iso = data.get("country","")
+                    except Exception:
+                        code_iso = None
+                    prefixe_detecte = ISO_VERS_PREFIXE.get(code_iso) if code_iso else None
+                    trouve = None
+                    if prefixe_detecte:
+                        for cle_p, (nom_p, pfx) in PAYS.items():
+                            if pfx == prefixe_detecte:
+                                trouve = (cle_p, nom_p, pfx); break
+                    if trouve:
+                        envoyer_srv(conn, {"ok":True,"cle_pays":trouve[0],"nom_pays":trouve[1],"prefixe":trouve[2]})
+                    else:
+                        envoyer_srv(conn, {"ok":False})
+                    continue
+
                 # ─── INSCRIPTION ──────────────────────────
                 if act == "inscrire":
                     cle_bf_insc = f"inscrire_{addr[0]}"
