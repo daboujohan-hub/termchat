@@ -813,6 +813,7 @@ def menu_principal():
     print(f"  {C2}9{Z} — 🎨  Couleur")
     print(f"  {C2}f{Z} — 💌  Feedback au développeur")
     print(f"  {C2}s{Z} — 🛡️   Sécurité")
+    print(f"  {C2}e{Z} — 🏫  EduMap (écoles)")
     if session.get("est_admin"):
         print(f"  {C2}0{Z} — ⚙️   Panel Admin")
     print(f"  {C2}q{Z} — 🚪  Déconnecter\n")
@@ -1721,6 +1722,86 @@ def envoyer_feedback():
     entree()
 
 
+def menu_edumap():
+    while en_cours and session.get("connecte"):
+        titre("🏫 EDUMAP")
+        C2 = get_C()
+        print(f"  {C2}1{Z} — 📋  Voir les écoles")
+        print(f"  {C2}2{Z} — ➕  Proposer une école")
+        print(f"  {C2}r{Z} — 🔙  Retour\n")
+        choix = input(f"{J}Choix: {Z}").strip().lower()
+        if choix == "1":
+            envoyer_cli({"action": "edumap_lister_ecoles"})
+            rep = attendre(8)
+            if rep and rep.get("ok"):
+                ecoles = rep.get("ecoles", [])
+                if not ecoles:
+                    info("Aucune école publiée pour l'instant.")
+                else:
+                    for i, e in enumerate(ecoles, 1):
+                        nb_photos = len(e.get("photos_base64", []))
+                        print(f"  {i} — {e.get('nom','?')} ({e.get('quartier','?')}) — {nb_photos} photo(s)")
+                    choix_e = input("\nNuméro de l'école pour télécharger ses photos (Entrée pour ignorer): ").strip()
+                    if choix_e.isdigit() and 1 <= int(choix_e) <= len(ecoles):
+                        ec = ecoles[int(choix_e) - 1]
+                        photos = ec.get("photos_base64", [])
+                        if not photos:
+                            info("Cette école n'a pas de photo.")
+                        else:
+                            dossier = os.path.join(DOWNLOADS, "edumap")
+                            os.makedirs(dossier, exist_ok=True)
+                            for idx, photo_b64 in enumerate(photos, 1):
+                                try:
+                                    data = base64.b64decode(photo_b64)
+                                    nom_fichier = ec.get("nom", "ecole").replace(" ", "_")
+                                    chemin = os.path.join(dossier, f"{nom_fichier}_{idx}.jpg")
+                                    with open(chemin, "wb") as f:
+                                        f.write(data)
+                                    print(f"{V}  ✅ {chemin}{Z}")
+                                except Exception as e2:
+                                    print(f"{R}  ❌ Photo {idx}: {e2}{Z}")
+            else:
+                erreur(rep.get("msg", "?") if rep else "?")
+            entree()
+        elif choix == "2":
+            nom_e = input("Nom de l'école: ").strip()
+            quartier_e = input("Quartier: ").strip()
+            try:
+                lat_e = float(input("Latitude: ").strip())
+                lng_e = float(input("Longitude: ").strip())
+            except ValueError:
+                erreur("Latitude/longitude invalides.")
+                entree()
+                continue
+            chemins = input(
+                "Chemins des photos (séparés par une virgule, Entrée pour aucune, max 5): "
+            ).strip()
+            photos_b64 = []
+            tailles = []
+            if chemins:
+                for chemin_p in chemins.split(",")[:5]:
+                    chemin_p = chemin_p.strip()
+                    try:
+                        with open(os.path.expanduser(chemin_p), "rb") as f:
+                            raw = f.read()
+                        photos_b64.append(base64.b64encode(raw).decode())
+                        tailles.append(len(raw))
+                    except Exception as e2:
+                        erreur(f"Impossible de lire {chemin_p}: {e2}")
+            envoyer_cli({
+                "action": "edumap_proposer_ecole", "nom": nom_e, "quartier": quartier_e,
+                "lat": lat_e, "lng": lng_e, "photos": photos_b64, "photos_tailles": tailles
+            })
+            rep = attendre(10)
+            if rep and rep.get("ok"):
+                succes(rep.get("msg", "École proposée."))
+            else:
+                erreur(rep.get("msg", "?") if rep else "?")
+            entree()
+        elif choix == "r":
+            break
+
+
 def menu_securite():
     while en_cours and session.get("connecte"):
         titre("🛡️  SÉCURITÉ")
@@ -2472,6 +2553,8 @@ def main():
                     envoyer_feedback()
                 elif choix == "s":
                     menu_securite()
+                elif choix == "e":
+                    menu_edumap()
                 elif choix == "0":
                     panel_admin()
                 elif choix == "q":

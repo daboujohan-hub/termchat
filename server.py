@@ -1574,6 +1574,8 @@ def gerer_client(conn, addr):
                         for d in docs:
                             e = d.to_dict()
                             e["id"] = d.id
+                            if e.get("statut", "publiee") != "publiee":
+                                continue
                             if "photos_base64" not in e and e.get("photo_base64"):
                                 e["photos_base64"] = [e["photo_base64"]]
                             ecoles.append(e)
@@ -1613,12 +1615,108 @@ def gerer_client(conn, addr):
                                         "lat": lat, "lng": lng,
                                         "photos_base64": photos_b64,
                                         "ajoute_le": horodatage(),
+                                        "statut": "publiee",
                                     }
                                     db.collection("ecoles_edumap").document(ecole_id).set(ecole)
                                     fs_log_audit_complet(num_co or "admin_edumap", "edumap_ajout_ecole", nom, ip_client=addr[0])
                                     envoyer_srv(conn, {"ok":True,"id":ecole_id,"msg":f"Ecole '{nom}' ajoutee."})
                             except Exception as e:
                                 envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
+
+                elif act == "edumap_proposer_ecole":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        nom = (p.get("nom") or "").strip()
+                        quartier = (p.get("quartier") or "").strip()
+                        try:
+                            lat = float(p.get("lat"))
+                            lng = float(p.get("lng"))
+                        except (TypeError, ValueError):
+                            lat = lng = None
+                        if not nom or not quartier or lat is None or lng is None:
+                            envoyer_srv(conn, {"ok":False,"msg":"Nom, quartier et position GPS requis."})
+                        else:
+                            try:
+                                photos = p.get("photos") or []
+                                tailles = p.get("photos_tailles") or []
+                                if len(photos) > 5:
+                                    envoyer_srv(conn, {"ok":False,"msg":"5 photos maximum."})
+                                else:
+                                    _, u = fs_get_user_by_numero(num_co)
+                                    ecole_id = gen_id("ecole_")
+                                    photos_b64 = []
+                                    for i, photo_c64 in enumerate(photos):
+                                        taille = tailles[i] if i < len(tailles) else 0
+                                        data, _ = decoder_base64_strict(photo_c64, taille, EDUMAP_MAX_PHOTO_BYTES)
+                                        photos_b64.append(base64.b64encode(data).decode("ascii"))
+                                    ecole = {
+                                        "nom": nom, "quartier": quartier,
+                                        "lat": lat, "lng": lng,
+                                        "photos_base64": photos_b64,
+                                        "ajoute_le": horodatage(),
+                                        "statut": "en_attente",
+                                        "propose_par": num_co,
+                                        "propose_par_nom": u.get("nom","?") if u else "?",
+                                    }
+                                    db.collection("ecoles_edumap").document(ecole_id).set(ecole)
+                                    fs_log_audit_complet(num_co, "edumap_proposition_ecole", nom, ip_client=addr[0])
+                                    envoyer_srv(conn, {"ok":True,"id":ecole_id,"msg":f"Ecole '{nom}' proposee, en attente de validation."})
+                            except Exception as e:
+                                envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
+
+                elif act == "edumap_lister_en_attente":
+                    mdp_fourni = p.get("mot_de_passe","")
+                    if not EDUMAP_ADMIN_PASSWORD or mdp_fourni != EDUMAP_ADMIN_PASSWORD:
+                        envoyer_srv(conn, {"ok":False,"msg":"Mot de passe admin incorrect."})
+                    else:
+                        try:
+                            docs = db.collection("ecoles_edumap")\
+                                     .where(filter=FieldFilter("statut","==","en_attente")).stream()
+                            ecoles = []
+                            for d in docs:
+                                e = d.to_dict(); e["id"] = d.id
+                                ecoles.append(e)
+                            envoyer_srv(conn, {"ok":True,"ecoles":ecoles})
+                        except Exception as e:
+                            envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
+
+                elif act == "edumap_approuver_ecole":
+                    mdp_fourni = p.get("mot_de_passe","")
+                    if not EDUMAP_ADMIN_PASSWORD or mdp_fourni != EDUMAP_ADMIN_PASSWORD:
+                        envoyer_srv(conn, {"ok":False,"msg":"Mot de passe admin incorrect."})
+                    else:
+                        ecole_id = p.get("id","").strip()
+                        try:
+                            ref = db.collection("ecoles_edumap").document(ecole_id)
+                            doc = ref.get()
+                            if not doc.exists:
+                                envoyer_srv(conn, {"ok":False,"msg":"Ecole introuvable."})
+                            else:
+                                ref.update({"statut":"publiee"})
+                                d = doc.to_dict()
+                                if d.get("propose_par"):
+                                    livrer(d["propose_par"], {"type":"edumap_approuvee","nom":d.get("nom","?")})
+                                envoyer_srv(conn, {"ok":True,"msg":"Ecole approuvee et publiee."})
+                        except Exception as e:
+                            envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
+
+                elif act == "edumap_rejeter_ecole":
+                    mdp_fourni = p.get("mot_de_passe","")
+                    if not EDUMAP_ADMIN_PASSWORD or mdp_fourni != EDUMAP_ADMIN_PASSWORD:
+                        envoyer_srv(conn, {"ok":False,"msg":"Mot de passe admin incorrect."})
+                    else:
+                        ecole_id = p.get("id","").strip()
+                        try:
+                            ref = db.collection("ecoles_edumap").document(ecole_id)
+                            doc = ref.get()
+                            if not doc.exists:
+                                envoyer_srv(conn, {"ok":False,"msg":"Ecole introuvable."})
+                            else:
+                                ref.delete()
+                                envoyer_srv(conn, {"ok":True,"msg":"Proposition rejetee et supprimee."})
+                        except Exception as e:
+                            envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
 
                 # ─── MESSAGE ──────────────────────────────
                 elif act == "message":
