@@ -166,6 +166,32 @@ def _deriver_cle_fichier(mdp: str, salt: bytes) -> bytes:
     return kdf.derive(mdp.encode())
 
 
+DEVICE_ID_FICHIER = os.path.join(os.path.expanduser("~"), ".termchat_device_id")
+DEVICE_ID = None
+
+
+def charger_ou_creer_device_id():
+    """Genere une cle d'appareil unique (20 caracteres) a la toute premiere
+    utilisation, et la reutilise ensuite sans jamais la modifier."""
+    if os.path.exists(DEVICE_ID_FICHIER):
+        try:
+            with open(DEVICE_ID_FICHIER, "r") as f:
+                did = f.read().strip()
+            if did:
+                return did
+        except Exception:
+            pass
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    did = "".join(secrets.choice(alphabet) for _ in range(20))
+    try:
+        with open(DEVICE_ID_FICHIER, "w") as f:
+            f.write(did)
+        os.chmod(DEVICE_ID_FICHIER, 0o600)
+    except Exception:
+        pass
+    return did
+
+
 def charger_ou_creer_identite(numero=None):
     """Charge la clé privée X25519 chiffrée, ou en crée une protégée par mot de passe."""
     identity_file = _identity_file_pour(numero)
@@ -490,6 +516,9 @@ def banniere():
 
 def envoyer_cli(p):
     try:
+        if DEVICE_ID and "device_id" not in p:
+            p = dict(p)
+            p["device_id"] = DEVICE_ID
         with rep_lock:
             reponses.clear()
         sock_cli.sendall((json.dumps(p, ensure_ascii=False) + "\n").encode())
@@ -2032,6 +2061,7 @@ def panel_admin():
         ("p", "🔑  Gérer les rôles admin", set()),
         ("k", "🔐  Réinitialiser une clé publique (E2E)", set()),
         ("v", "✅  Certifier un compte (badge vérifié)", set()),
+        ("b", "📵  Bloquer/débloquer un appareil", set()),
         ("n", "🆕  Créer un compte admin (préfixe TC00)", set()),
     ]
 
@@ -2266,6 +2296,7 @@ def panel_admin():
                         st = STATUTS_ICONS.get(c.get("statut","disponible"), "")
                         print(f"  🟢 {B}{c.get('nom','?')}{Z} {G}{c.get('numero','')}{Z}")
                         print(f"     IP: {J}{c.get('ip','?')}{Z}  Pays: {c.get('pays','?')}  Connecte: {c.get('heure_connexion','')}")
+                        print(f"     Appareil: {c.get('device_id','?')}")
                         print(f"     {st}")
                         print()
             else:
@@ -2394,6 +2425,27 @@ def panel_admin():
                     erreur(rep.get("msg", "?") if rep else "?")
             entree()
 
+        elif choix == "b":
+            did_cible = input("Identifiant d'appareil (20 caractères): ").strip()
+            print("  1 — Bloquer  |  2 — Débloquer")
+            cb = input("Choix: ").strip()
+            if cb == "1":
+                raison = input("Raison (optionnel): ").strip()
+                envoyer_cli({"action": "admin_bloquer_appareil", "device_id_cible": did_cible, "raison": raison})
+                rep = attendre()
+                if rep and rep.get("ok"):
+                    succes(rep.get("msg", ""))
+                else:
+                    erreur(rep.get("msg", "?") if rep else "?")
+            elif cb == "2":
+                envoyer_cli({"action": "admin_debloquer_appareil", "device_id_cible": did_cible})
+                rep = attendre()
+                if rep and rep.get("ok"):
+                    succes(rep.get("msg", ""))
+                else:
+                    erreur(rep.get("msg", "?") if rep else "?")
+            entree()
+
         elif choix == "g":
             envoyer_cli({"action": "admin_signalements"})
             rep = attendre(10)
@@ -2441,9 +2493,11 @@ def quitter(sig=None, frame=None):
     sys.exit(0)
 
 def main():
-    global sock_cli, en_cours, ma_cle_privee
+    global sock_cli, en_cours, ma_cle_privee, DEVICE_ID
 
     banniere()
+
+    DEVICE_ID = charger_ou_creer_device_id()
 
     host = sys.argv[1] if len(sys.argv) >= 2 else "altaria.proxy.rlwy.net"
     port = int(sys.argv[2]) if len(sys.argv) >= 3 else 20022

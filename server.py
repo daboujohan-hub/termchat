@@ -565,6 +565,46 @@ def fs_log_audit_complet(numero, action, details="", cible="", ip_client=""):
     except Exception as e:
         print(f"Firestore erreur (audit complet): {e}")
 
+def fs_log_action_appareil(numero, device_id, action, ip_client):
+    """Journal complet (toutes actions) par appareil. Ecriture en arriere-plan
+    (thread separe) pour ne jamais ralentir la reponse a l'utilisateur."""
+    if not db or not device_id: return
+    def _ecrire():
+        try:
+            db.collection("journal_appareils").add({
+                "numero": numero or "", "device_id": device_id,
+                "action": action, "heure": horodatage(), "ip": ip_client or "inconnu"
+            })
+        except Exception as e:
+            print(f"Firestore erreur (journal appareil): {e}")
+    threading.Thread(target=_ecrire, daemon=True).start()
+
+def fs_charger_appareils_bloques():
+    if not db: return set()
+    try:
+        docs = db.collection("appareils_bloques").stream()
+        return {doc.id for doc in docs}
+    except Exception as e:
+        print(f"Firestore erreur (chargement appareils bloques): {e}"); return set()
+
+def fs_bloquer_appareil(device_id, raison=""):
+    if not db or not device_id: return
+    try:
+        db.collection("appareils_bloques").document(device_id).set({
+            "bloque_le": horodatage(), "raison": raison
+        })
+        appareils_bloques_cache.add(device_id)
+    except Exception as e:
+        print(f"Firestore erreur (blocage appareil): {e}")
+
+def fs_debloquer_appareil(device_id):
+    if not db or not device_id: return
+    try:
+        db.collection("appareils_bloques").document(device_id).delete()
+        appareils_bloques_cache.discard(device_id)
+    except Exception as e:
+        print(f"Firestore erreur (deblocage appareil): {e}")
+
 def fs_log_audit(admin_numero, action, cible="", details=""):
     """Enregistre une action admin dans le journal d'audit (jamais modifiable/supprimable via l'app)."""
     if not db: return
@@ -943,6 +983,7 @@ connexions_actives = {}  # numero -> {"ip": str, "heure_connexion": str, "pays":
 alertes_securite = []  # [{"heure", "severite", "type", "ip", "details"}]
 admins_connectes = set()
 connexions_en_attente_totp = {}  # conn -> {"uid": str, "ip": str}
+appareils_bloques_cache = set()  # device_id bloques, charge au demarrage + maj live
 lock             = threading.Lock()
 TIMEOUT          = 1800
 MAX_CONNEXIONS_SIMULTANEES = 500  # au-dela, nouvelles connexions refusees (protection DoS)
@@ -1108,7 +1149,7 @@ def a_permission(role, action):
     return action in perms
 
 
-def _connecter_user(conn, user, uid, ip_client=""):
+def _connecter_user(conn, user, uid, ip_client="", device_id=""):
     """Finalise la connexion d'un utilisateur avec limite de sessions."""
     num_co    = user["numero"]
     est_admin = user.get("est_admin", False)
@@ -1152,7 +1193,8 @@ def _connecter_user(conn, user, uid, ip_client=""):
             "heure_connexion": horodatage(),
             "pays": user.get("pays", "Inconnu"),
             "nom": user.get("nom", "?"),
-            "statut": user.get("statut", "disponible")
+            "statut": user.get("statut", "disponible"),
+            "device_id": device_id
         }
 
     envoyer_srv(conn, {
@@ -1211,10 +1253,15 @@ def gerer_client(conn, addr):
                     envoyer_srv(conn, {"ok":False,"msg":"Requête invalide."})
                     continue
                 act = p.get("action", "")
+                device_id = p.get("device_id", "")
                 print(f"REQUETE RECUE: action={act} depuis {addr[0]}")
                 if not act:
                     envoyer_srv(conn, {"ok":False,"msg":"Requête invalide."})
                     continue
+                if device_id and device_id in appareils_bloques_cache:
+                    envoyer_srv(conn, {"ok":False,"msg":"Cet appareil est bloque."})
+                    continue
+                fs_log_action_appareil(num_co, device_id, act, ip_client)
                 if limite_depassee(f"act_ip:{ip_client}", GLOBAL_ACTIONS_PER_MIN, 60):
                     envoyer_srv(conn, {"ok":False,"msg":"Trop de requêtes. Réessaie plus tard."})
                     continue
@@ -1326,10 +1373,10 @@ def gerer_client(conn, addr):
                             fs_update_user(uid, {"mdp": hacher(mdp)})
                         if user.get("totp_actif"):
                             with lock:
-                                connexions_en_attente_totp[conn] = {"uid": uid, "ip": ip}
+                                connexions_en_attente_totp[conn] = {"uid": uid, "ip": ip, "device_id": device_id}
                             envoyer_srv(conn, {"ok":True,"totp_requis":True,"msg":"Entrez votre code TOTP."})
                         else:
-                            num_co, est_admin, admin_role = _connecter_user(conn, user, uid, ip_client=ip)
+                            num_co, est_admin, admin_role = _connecter_user(conn, user, uid, ip_client=ip, device_id=device_id)
 
                 # ─── CONNEXION (email) ─────────────────────
                 # ─── CONNEXION (email) ─────────────────────
@@ -1360,10 +1407,10 @@ def gerer_client(conn, addr):
                             fs_update_user(uid, {"mdp": hacher(mdp)})
                         if user.get("totp_actif"):
                             with lock:
-                                connexions_en_attente_totp[conn] = {"uid": uid, "ip": ip}
+                                connexions_en_attente_totp[conn] = {"uid": uid, "ip": ip, "device_id": device_id}
                             envoyer_srv(conn, {"ok":True,"totp_requis":True,"msg":"Entrez votre code TOTP."})
                         else:
-                            num_co, est_admin, admin_role = _connecter_user(conn, user, uid, ip_client=ip)
+                            num_co, est_admin, admin_role = _connecter_user(conn, user, uid, ip_client=ip, device_id=device_id)
 
                 # ─── DEFINIR PSEUDO (migration anciens comptes) ──
                 elif act == "definir_pseudo":
@@ -1414,7 +1461,7 @@ def gerer_client(conn, addr):
                             signaler_succes(cle_bf_totp)
                             with lock:
                                 connexions_en_attente_totp.pop(conn, None)
-                            num_co, est_admin, admin_role = _connecter_user(conn, user, uid, ip_client=attente["ip"])
+                            num_co, est_admin, admin_role = _connecter_user(conn, user, uid, ip_client=attente["ip"], device_id=attente.get("device_id",""))
 
                 # ─── TOTP: DEMARRER CONFIGURATION ─────────
                 elif act == "totp_setup_demarrer":
@@ -2727,6 +2774,7 @@ def gerer_client(conn, addr):
                                     "pays": info.get("pays", "?"),
                                     "heure_connexion": info.get("heure_connexion", "")[:16].replace("T", " "),
                                     "statut": info.get("statut", "disponible"),
+                                    "device_id": info.get("device_id", ""),
                                     "en_ligne": True
                                 })
                         envoyer_srv(conn, {"ok":True,"connexions":result})
@@ -2877,6 +2925,31 @@ def gerer_client(conn, addr):
                             fs_log_audit(num_co, "verifier_compte", cible, f"verifie={etat}")
                             verbe = "certifie ✅" if etat else "retire de la certification"
                             envoyer_srv(conn, {"ok":True,"msg":f"{cible} {verbe}."})
+
+                elif act == "admin_bloquer_appareil":
+                    if not a_permission(admin_role, "admin_bloquer_appareil"):
+                        envoyer_srv(conn, {"ok":False,"msg":"Acces refuse. Seul le super-admin peut bloquer un appareil."})
+                    else:
+                        cible_did = p.get("device_id_cible","").strip()
+                        raison = p.get("raison","").strip()
+                        if not cible_did:
+                            envoyer_srv(conn, {"ok":False,"msg":"Identifiant d'appareil requis."})
+                        else:
+                            fs_bloquer_appareil(cible_did, raison)
+                            fs_log_audit(num_co, "bloquer_appareil", cible_did, raison)
+                            envoyer_srv(conn, {"ok":True,"msg":f"Appareil {cible_did} bloque."})
+
+                elif act == "admin_debloquer_appareil":
+                    if not a_permission(admin_role, "admin_debloquer_appareil"):
+                        envoyer_srv(conn, {"ok":False,"msg":"Acces refuse. Seul le super-admin peut debloquer un appareil."})
+                    else:
+                        cible_did = p.get("device_id_cible","").strip()
+                        if not cible_did:
+                            envoyer_srv(conn, {"ok":False,"msg":"Identifiant d'appareil requis."})
+                        else:
+                            fs_debloquer_appareil(cible_did)
+                            fs_log_audit(num_co, "debloquer_appareil", cible_did, "")
+                            envoyer_srv(conn, {"ok":True,"msg":f"Appareil {cible_did} debloque."})
 
                 elif act == "admin_creer_compte":
                     if not a_permission(admin_role, "admin_creer_compte"):
@@ -3064,6 +3137,9 @@ def main():
         sys.exit(1)
     elif not REQUIRE_FIREBASE:
         init_firebase()
+    global appareils_bloques_cache
+    appareils_bloques_cache = fs_charger_appareils_bloques()
+    print(f"🔒 {len(appareils_bloques_cache)} appareil(s) bloque(s) charge(s).")
     preparer_certificat_tls()
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
