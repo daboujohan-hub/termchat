@@ -62,6 +62,7 @@ MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(5 * 1024 * 1024)))
 MAX_BUFFER_BYTES = int(os.environ.get("MAX_BUFFER_BYTES", str(MAX_UPLOAD_BYTES * 2 + 1024 * 1024)))
 MAX_FEEDBACK_LEN = int(os.environ.get("MAX_FEEDBACK_LEN", "500"))
 MAX_BIO_LEN = int(os.environ.get("MAX_BIO_LEN", "150"))
+MAX_PHOTO_PROFIL_BYTES = int(os.environ.get("MAX_PHOTO_PROFIL_BYTES", str(300 * 1024)))
 MAX_FILES_DIR_BYTES = int(os.environ.get("MAX_FILES_DIR_BYTES", str(256 * 1024 * 1024)))
 MAX_FILE_RETENTION_SECONDS = int(os.environ.get("MAX_FILE_RETENTION_SECONDS", str(24 * 3600)))
 GLOBAL_ACTIONS_PER_MIN = int(os.environ.get("GLOBAL_ACTIONS_PER_MIN", "180"))
@@ -1955,6 +1956,35 @@ def gerer_client(conn, addr):
                             envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
                         else:
                             fs_update_user(uid, {"bio":bio}); envoyer_srv(conn, {"ok":True,"msg":"Bio mise a jour!"})
+
+                elif act == "definir_photo_profil":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        uid, _ = fs_get_user_by_numero(num_co)
+                        if not uid:
+                            envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        else:
+                            try:
+                                photo_c64 = p.get("photo_base64","")
+                                taille = p.get("taille", 0)
+                                data, _ = decoder_base64_strict(photo_c64, taille, MAX_PHOTO_PROFIL_BYTES)
+                                photo_b64 = base64.b64encode(data).decode("ascii")
+                                fs_update_user(uid, {"photo_profil_base64": photo_b64})
+                                envoyer_srv(conn, {"ok":True,"msg":"Photo de profil mise a jour!","photo_base64":photo_b64})
+                            except ValueError as e:
+                                envoyer_srv(conn, {"ok":False,"msg":str(e)})
+
+                elif act == "retirer_photo_profil":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        uid, _ = fs_get_user_by_numero(num_co)
+                        if not uid:
+                            envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        else:
+                            fs_update_user(uid, {"photo_profil_base64": None})
+                            envoyer_srv(conn, {"ok":True,"msg":"Photo de profil retiree."})
 
 
                 # ─── FEEDBACK (message au developpeur) ────
