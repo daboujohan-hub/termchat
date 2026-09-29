@@ -2499,8 +2499,8 @@ def main():
 
     DEVICE_ID = charger_ou_creer_device_id()
 
-    host = sys.argv[1] if len(sys.argv) >= 2 else "altaria.proxy.rlwy.net"
-    port = int(sys.argv[2]) if len(sys.argv) >= 3 else 20022
+    host = sys.argv[1] if len(sys.argv) >= 2 else "iriguchi.proxy.rlwy.net"
+    port = int(sys.argv[2]) if len(sys.argv) >= 3 else 35944
 
     print(f"{G}🔌 Connexion à {host}:{port}...{Z}")
 
