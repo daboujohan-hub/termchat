@@ -15,10 +15,40 @@ Correctifs sécurité v6.2 :
 - Fichiers optionnellement chiffrés au repos (FILE_ENCRYPTION_KEY)
 """
 
+# ── Mode gevent (optionnel) : TERMCHAT_GEVENT=1 python3 server.py ──
+import os as _os
+_GEVENT_ACTIF = False
+if _os.environ.get("TERMCHAT_GEVENT") == "1":
+    try:
+        from gevent import monkey as _monkey
+        _monkey.patch_all()
+        _GEVENT_ACTIF = True
+    except ImportError:
+        print("⚠️  TERMCHAT_GEVENT=1 mais gevent n'est pas installe (pip install gevent). Mode threads classique.")
+    if _GEVENT_ACTIF:
+        try:
+            import grpc.experimental.gevent as _grpc_gevent
+            _grpc_gevent.init_gevent()
+        except Exception as _e:
+            print(f"❌ gevent/gRPC incompatible ({_e}). Relance sans TERMCHAT_GEVENT=1.")
+            raise SystemExit(1)
+        print("⚡ Mode gevent active")
+
 import socket, threading, json, os, hashlib, re, uuid, binascii, ipaddress, random
 import datetime, time, base64, signal, sys, ssl, secrets
 from pathlib import Path
+import weakref as _weakref, copy as _copy
 import bcrypt
+if _GEVENT_ACTIF:
+    # bcrypt est un calcul lourd : on le fait dans un vrai thread pour ne pas figer les autres connexions
+    import gevent as _gevent
+    _bc_hashpw, _bc_checkpw = bcrypt.hashpw, bcrypt.checkpw
+    def _bc_hors_boucle(fn):
+        def _w(*a, **k):
+            return _gevent.get_hub().threadpool.apply(fn, a, k)
+        return _w
+    bcrypt.hashpw = _bc_hors_boucle(_bc_hashpw)
+    bcrypt.checkpw = _bc_hors_boucle(_bc_checkpw)
 import pyotp
 
 # Firebase Admin SDK
@@ -62,6 +92,11 @@ MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(5 * 1024 * 1024)))
 MAX_BUFFER_BYTES = int(os.environ.get("MAX_BUFFER_BYTES", str(MAX_UPLOAD_BYTES * 2 + 1024 * 1024)))
 MAX_FEEDBACK_LEN = int(os.environ.get("MAX_FEEDBACK_LEN", "500"))
 MAX_BIO_LEN = int(os.environ.get("MAX_BIO_LEN", "150"))
+MAX_ECRITURE_TITRE_LEN = int(os.environ.get("MAX_ECRITURE_TITRE_LEN", "100"))
+MAX_ECRITURE_TEXTE_LEN = int(os.environ.get("MAX_ECRITURE_TEXTE_LEN", "10000"))
+MAX_ECRITURE_COMMENTAIRE_LEN = int(os.environ.get("MAX_ECRITURE_COMMENTAIRE_LEN", "500"))
+MAX_ECRITURE_PHOTO_BYTES = int(os.environ.get("MAX_ECRITURE_PHOTO_BYTES", str(400 * 1024)))
+ECRITURES_PAGE = int(os.environ.get("ECRITURES_PAGE", "20"))
 MAX_PHOTO_PROFIL_BYTES = int(os.environ.get("MAX_PHOTO_PROFIL_BYTES", str(300 * 1024)))
 MAX_FILES_DIR_BYTES = int(os.environ.get("MAX_FILES_DIR_BYTES", str(256 * 1024 * 1024)))
 MAX_FILE_RETENTION_SECONDS = int(os.environ.get("MAX_FILE_RETENTION_SECONDS", str(24 * 3600)))
@@ -460,7 +495,35 @@ def gen_numero(prefixe):
 # ══════════════════════════════════════════════════════════
 #  OPÉRATIONS FIRESTORE
 # ══════════════════════════════════════════════════════════
+# ── Cache des utilisateurs (étape 1 montée en charge) ──────
+_CACHE_USERS_TTL = int(os.environ.get("CACHE_USERS_TTL", "30"))   # secondes
+_cache_users = {}        # numero -> (heure, uid, donnees)
+_cache_users_uid = {}    # uid -> numero
+_cache_users_lock = threading.Lock()
+
+def _cache_users_invalider(uid):
+    with _cache_users_lock:
+        num = _cache_users_uid.pop(uid, None)
+        if num is not None:
+            _cache_users.pop(num, None)
+
 def fs_get_user_by_numero(numero):
+    maintenant = time.time()
+    with _cache_users_lock:
+        e = _cache_users.get(numero)
+    if e and maintenant - e[0] < _CACHE_USERS_TTL:
+        return e[1], _copy.deepcopy(e[2])
+    uid, data = _fs_get_user_by_numero_direct(numero)
+    if uid and data is not None:   # on ne met jamais en cache un « introuvable »
+        with _cache_users_lock:
+            if len(_cache_users) > 50000:
+                _cache_users.clear(); _cache_users_uid.clear()
+            _leger = {k: v for k, v in data.items() if k != "photo_profil_base64"}
+            _cache_users[numero] = (maintenant, uid, _copy.deepcopy(_leger))
+            _cache_users_uid[uid] = numero
+    return uid, data
+
+def _fs_get_user_by_numero_direct(numero):
     if not db: return None, None
     try:
         docs = db.collection("users").where(filter=FieldFilter("numero", "==", numero)).limit(1).stream()
@@ -510,16 +573,19 @@ def fs_save_user(uid, data):
     if not db: return
     try: db.collection("users").document(uid).set(data)
     except Exception as e: print(f"Firestore erreur: {e}")
+    _cache_users_invalider(uid)
 
 def fs_update_user(uid, fields):
     if not db: return
     try: db.collection("users").document(uid).update(fields)
     except Exception as e: print(f"Firestore erreur: {e}")
+    _cache_users_invalider(uid)
 
 def fs_delete_user(uid):
     if not db: return
     try: db.collection("users").document(uid).delete()
     except Exception as e: print(f"Firestore erreur: {e}")
+    _cache_users_invalider(uid)
 
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 RESEND_FROM = os.environ.get("RESEND_FROM", "onboarding@resend.dev")
@@ -962,6 +1028,354 @@ def fs_get_commentaires_canal(cid, post_id):
         print(f"Firestore erreur: {e}"); return []
 
 # ══════════════════════════════════════════════════════════
+#  ÉCRITURES (publications, likes, commentaires, favoris)
+#  Collections Firestore : ecritures (+ sous-collection commentaires), favoris
+# ══════════════════════════════════════════════════════════
+RE_ID_ECRITURE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+def fs_save_ecriture(data):
+    if not db: return None
+    try:
+        ref = db.collection("ecritures").document()
+        data = dict(data); data["id"] = ref.id
+        ref.set(data)
+        return ref.id
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return None
+
+def fs_get_ecriture(eid):
+    if not db or not RE_ID_ECRITURE.match(eid or ""): return None
+    try:
+        doc = db.collection("ecritures").document(eid).get()
+        return doc.to_dict() if doc.exists else None
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return None
+
+def fs_update_ecriture(eid, fields):
+    if not db or not RE_ID_ECRITURE.match(eid or ""): return False
+    try:
+        db.collection("ecritures").document(eid).update(fields)
+        return True
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return False
+
+def fs_supprimer_ecriture(eid):
+    if not db or not RE_ID_ECRITURE.match(eid or ""): return False
+    try:
+        ref = db.collection("ecritures").document(eid)
+        for c in ref.collection("commentaires").stream():
+            c.reference.delete()
+        for f in db.collection("favoris").where(filter=FieldFilter("ecriture_id", "==", eid)).stream():
+            f.reference.delete()
+        ref.delete()
+        return True
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return False
+
+def fs_lister_ecritures(curseur="", limite=20):
+    """Fil public, plus récent en premier. curseur = date_creation de la dernière écriture reçue."""
+    if not db: return []
+    try:
+        q = db.collection("ecritures").order_by("date_creation", direction=firestore.Query.DESCENDING)
+        if curseur:
+            q = q.start_after({"date_creation": curseur})
+        return [d.to_dict() for d in q.limit(limite).stream()]
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return []
+
+def fs_ecritures_de(numero):
+    if not db: return []
+    try:
+        docs = db.collection("ecritures").where(filter=FieldFilter("auteur", "==", numero)).stream()
+        res = [d.to_dict() for d in docs]
+        res.sort(key=lambda e: e.get("date_creation", ""), reverse=True)
+        return res
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return []
+
+def fs_liker_ecriture(eid, numero, aime):
+    try:
+        op = firestore.ArrayUnion([numero]) if aime else firestore.ArrayRemove([numero])
+        return fs_update_ecriture(eid, {"likes": op})
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return False
+
+def fs_ajouter_commentaire_ecriture(eid, com):
+    if not db or not RE_ID_ECRITURE.match(eid or ""): return None
+    try:
+        ecr = db.collection("ecritures").document(eid)
+        ref = ecr.collection("commentaires").document()
+        com = dict(com); com["id"] = ref.id
+        ref.set(com)
+        ecr.update({"nb_commentaires": firestore.Increment(1)})
+        return ref.id
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return None
+
+def fs_get_commentaires_ecriture(eid, limite=500):
+    if not db or not RE_ID_ECRITURE.match(eid or ""): return []
+    try:
+        docs = db.collection("ecritures").document(eid).collection("commentaires")\
+                 .order_by("date", direction=firestore.Query.ASCENDING).limit(limite).stream()
+        return [d.to_dict() for d in docs]
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return []
+
+def fs_favori_ecriture(numero, eid, ajouter):
+    if not db: return False
+    try:
+        ref = db.collection("favoris").document(f"{numero}_{eid}")
+        if ajouter:
+            ref.set({"numero": numero, "ecriture_id": eid, "date_ajout": horodatage()})
+        else:
+            ref.delete()
+        return True
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return False
+
+def fs_est_favori_ecriture(numero, eid):
+    if not db: return False
+    try:
+        return db.collection("favoris").document(f"{numero}_{eid}").get().exists
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return False
+
+def fs_mes_favoris_ecritures(numero, limite=100):
+    if not db: return []
+    try:
+        favs = [d.to_dict() for d in db.collection("favoris")
+                .where(filter=FieldFilter("numero", "==", numero)).stream()]
+        favs.sort(key=lambda f: f.get("date_ajout", ""), reverse=True)
+        refs = [db.collection("ecritures").document(f["ecriture_id"])
+                for f in favs[:limite] if RE_ID_ECRITURE.match(f.get("ecriture_id", ""))]
+        if not refs: return []
+        return [d for d in (s.to_dict() for s in db.get_all(refs) if s.exists) if not d.get("masquee")]
+    except Exception as e:
+        print(f"Firestore erreur: {e}"); return []
+
+def _apercu_ecriture(e, num_co):
+    texte = e.get("texte", "") or ""
+    likes = e.get("likes", []) or []
+    return {
+        "id": e.get("id"), "titre": e.get("titre", ""),
+        "extrait": texte[:150] + ("…" if len(texte) > 150 else ""),
+        "auteur": e.get("auteur"), "auteur_nom": e.get("auteur_nom", "?"),
+        "date_creation": e.get("date_creation"),
+        "nb_likes": len(likes), "nb_commentaires": int(e.get("nb_commentaires", 0) or 0),
+        "a_aime": num_co in likes,
+        "a_photo": bool(e.get("photo_couverture_base64")),
+    }
+
+def _detail_ecriture(e, num_co):
+    likes = e.get("likes", []) or []
+    return {
+        "id": e.get("id"), "titre": e.get("titre", ""), "texte": e.get("texte", ""),
+        "photo_couverture_base64": e.get("photo_couverture_base64"),
+        "auteur": e.get("auteur"), "auteur_nom": e.get("auteur_nom", "?"),
+        "date_creation": e.get("date_creation"), "date_modification": e.get("date_modification"),
+        "nb_likes": len(likes), "nb_commentaires": int(e.get("nb_commentaires", 0) or 0),
+        "a_aime": num_co in likes,
+        "a_favori": fs_est_favori_ecriture(num_co, e.get("id")),
+    }
+
+def _photo_ecriture(p):
+    """Décode et valide la photo de couverture. Lève ValueError si invalide."""
+    data, _ = decoder_base64_strict(p.get("photo_couverture", ""), p.get("photo_taille", 0),
+                                    MAX_ECRITURE_PHOTO_BYTES)
+    return base64.b64encode(data).decode("ascii")
+
+def _valider_titre_texte(p):
+    titre = str(p.get("titre", "") or "").strip()
+    texte = str(p.get("texte", "") or "").strip()
+    if not titre: return None, None, "Titre requis."
+    if len(titre) > MAX_ECRITURE_TITRE_LEN:
+        return None, None, f"Titre trop long (max {MAX_ECRITURE_TITRE_LEN} caracteres)."
+    if not texte: return None, None, "Texte requis."
+    if len(texte) > MAX_ECRITURE_TEXTE_LEN:
+        return None, None, f"Texte trop long (max {MAX_ECRITURE_TEXTE_LEN} caracteres)."
+    return titre, texte, None
+
+def _traiter_ecriture(act, p, num_co):
+    if not num_co: return {"ok": False, "msg": "Non connecte."}
+    if not db: return {"ok": False, "msg": "Base de donnees indisponible."}
+    eid = str(p.get("id", "") or "").strip()
+
+    if act == "ecriture_publier":
+        if limite_depassee(f"ecriture_pub:{num_co}", 5, 3600):
+            return {"ok": False, "msg": "Trop de publications. Reessaie plus tard."}
+        titre, texte, err = _valider_titre_texte(p)
+        if err: return {"ok": False, "msg": err}
+        photo = None
+        if p.get("photo_couverture"):
+            try: photo = _photo_ecriture(p)
+            except ValueError as e: return {"ok": False, "msg": str(e)}
+        _, u = fs_get_user_by_numero(num_co)
+        maintenant = horodatage()
+        nouvel_id = fs_save_ecriture({
+            "titre": titre, "texte": texte, "photo_couverture_base64": photo,
+            "auteur": num_co, "auteur_nom": u.get("nom", "?") if u else "?",
+            "date_creation": maintenant, "date_modification": maintenant,
+            "likes": [], "nb_commentaires": 0,
+        })
+        if not nouvel_id: return {"ok": False, "msg": "Erreur de publication."}
+        return {"ok": True, "id": nouvel_id}
+
+    if act == "ecriture_lister":
+        curseur = str(p.get("curseur", "") or "").strip()
+        docs = fs_lister_ecritures(curseur, ECRITURES_PAGE)
+        suivant = docs[-1].get("date_creation") if len(docs) >= ECRITURES_PAGE else None
+        return {"ok": True, "ecritures": [_apercu_ecriture(e, num_co) for e in docs if not e.get("masquee")],
+                "curseur_suivant": suivant}
+
+    if act == "mes_ecritures":
+        return {"ok": True, "ecritures": [_apercu_ecriture(e, num_co) for e in fs_ecritures_de(num_co)]}
+
+    if act == "ecriture_mes_favoris":
+        return {"ok": True, "ecritures": [_apercu_ecriture(e, num_co) for e in fs_mes_favoris_ecritures(num_co)]}
+
+    if act == "ecriture_par_auteur":
+        auteur = str(p.get("auteur", "") or "").strip()
+        if not auteur: return {"ok": False, "msg": "Auteur requis."}
+        liste = [x for x in fs_ecritures_de(auteur) if not x.get("masquee") or auteur == num_co]
+        return {"ok": True, "ecritures": [_apercu_ecriture(x, num_co) for x in liste]}
+
+    # Toutes les actions suivantes portent sur une écriture précise
+    e = fs_get_ecriture(eid)
+    if not e: return {"ok": False, "msg": "Ecriture introuvable."}
+    if e.get("masquee") and e.get("auteur") != num_co:
+        return {"ok": False, "msg": "Ecriture indisponible."}
+
+    if act == "ecriture_detail":
+        return {"ok": True, "ecriture": _detail_ecriture(e, num_co)}
+
+    if act == "ecriture_modifier":
+        if e.get("auteur") != num_co:
+            return {"ok": False, "msg": "Seul l'auteur peut modifier cette ecriture."}
+        titre, texte, err = _valider_titre_texte(p)
+        if err: return {"ok": False, "msg": err}
+        champs = {"titre": titre, "texte": texte, "date_modification": horodatage()}
+        if "photo_couverture" in p:  # absent = inchangee ; vide = retiree
+            if p.get("photo_couverture"):
+                try: champs["photo_couverture_base64"] = _photo_ecriture(p)
+                except ValueError as ex: return {"ok": False, "msg": str(ex)}
+            else:
+                champs["photo_couverture_base64"] = None
+        return {"ok": fs_update_ecriture(eid, champs)}
+
+    if act == "ecriture_supprimer":
+        if e.get("auteur") != num_co:
+            return {"ok": False, "msg": "Seul l'auteur peut supprimer cette ecriture."}
+        return {"ok": fs_supprimer_ecriture(eid)}
+
+    if act in ("ecriture_aimer", "ecriture_retirer_like"):
+        aime = (act == "ecriture_aimer")
+        likes = set(e.get("likes", []) or [])
+        likes.add(num_co) if aime else likes.discard(num_co)
+        ok = fs_liker_ecriture(eid, num_co, aime)
+        return {"ok": ok, "nb_likes": len(likes), "a_aime": aime}
+
+    if act == "ecriture_commenter":
+        texte = str(p.get("texte", "") or "").strip()
+        if not texte: return {"ok": False, "msg": "Texte requis."}
+        if len(texte) > MAX_ECRITURE_COMMENTAIRE_LEN:
+            return {"ok": False, "msg": f"Commentaire trop long (max {MAX_ECRITURE_COMMENTAIRE_LEN} caracteres)."}
+        if limite_depassee(f"ecriture_com:{num_co}", 20, 60):
+            return {"ok": False, "msg": "Trop de commentaires. Ralentis un peu."}
+        _, u = fs_get_user_by_numero(num_co)
+        nom = u.get("nom", "?") if u else "?"
+        cid = fs_ajouter_commentaire_ecriture(eid, {"de": num_co, "nom": nom, "texte": texte, "date": horodatage()})
+        if not cid: return {"ok": False, "msg": "Erreur d'envoi du commentaire."}
+        auteur = e.get("auteur")
+        if auteur and auteur != num_co:
+            livrer(auteur, {"type": "ecriture_commentaire", "ecriture_id": eid, "titre": e.get("titre", ""),
+                            "de": nom, "texte": texte, "heure": heure()})
+        return {"ok": True}
+
+    if act == "ecriture_commentaires":
+        return {"ok": True, "commentaires": fs_get_commentaires_ecriture(eid)}
+
+    if act in ("ecriture_favoris_ajouter", "ecriture_favoris_retirer"):
+        return {"ok": fs_favori_ecriture(num_co, eid, act == "ecriture_favoris_ajouter")}
+
+    if act == "ecriture_signaler":
+        raison = str(p.get("raison", "") or "").strip()[:300]
+        if not raison: return {"ok": False, "msg": "Raison requise."}
+        if e.get("auteur") == num_co:
+            return {"ok": False, "msg": "Tu ne peux pas signaler ta propre ecriture."}
+        if limite_depassee(f"ecriture_sig:{num_co}", 10, 3600):
+            return {"ok": False, "msg": "Trop de signalements. Reessaie plus tard."}
+        ref = db.collection("signalements").document(f"sig_ecr_{num_co}_{eid}")
+        if ref.get().exists:
+            return {"ok": True, "msg": "Deja signale. Merci."}
+        ref.set({"signaleur": num_co, "cible": e.get("auteur"), "raison": raison,
+                 "msg_id": f"ecriture:{eid}", "type": "ecriture", "ecriture_id": eid,
+                 "heure": horodatage(), "statut": "nouveau", "ip": ""})
+        nb = int(e.get("nb_signalements", 0) or 0) + 1
+        champs = {"nb_signalements": firestore.Increment(1)}
+        if nb >= ECRITURE_SEUIL_MASQUAGE:
+            champs["masquee"] = True
+        fs_update_ecriture(eid, champs)
+        return {"ok": True, "msg": "Signalement enregistre. L'admin va examiner."}
+
+    if act == "ecriture_commentaire_supprimer":
+        return _supprimer_commentaire_ecriture(e, str(p.get("commentaire_id", "") or "").strip(), num_co, admin=False)
+
+    return {"ok": False, "msg": f"Action inconnue: {act}"}
+
+ECRITURE_SEUIL_MASQUAGE = int(os.environ.get("ECRITURE_SEUIL_MASQUAGE", "5"))
+
+def _supprimer_commentaire_ecriture(e, cid, num_co, admin):
+    """Supprime un commentaire : son auteur, l'auteur de l'écriture ou un admin."""
+    eid = e.get("id")
+    if not RE_ID_ECRITURE.match(cid or ""): return {"ok": False, "msg": "Commentaire introuvable."}
+    ref = db.collection("ecritures").document(eid).collection("commentaires").document(cid)
+    doc = ref.get()
+    if not doc.exists: return {"ok": False, "msg": "Commentaire introuvable."}
+    c = doc.to_dict() or {}
+    if not admin and c.get("de") != num_co and e.get("auteur") != num_co:
+        return {"ok": False, "msg": "Non autorise."}
+    ref.delete()
+    fs_update_ecriture(eid, {"nb_commentaires": firestore.Increment(-1)})
+    return {"ok": True}
+
+def moderation_ecriture_admin(act, p, num_co):
+    """Actions de modération réservées aux admins (permissions vérifiées avant l'appel)."""
+    try:
+        if not db: return {"ok": False, "msg": "Base de donnees indisponible."}
+        eid = str(p.get("id", "") or "").strip()
+        e = fs_get_ecriture(eid)
+        if not e: return {"ok": False, "msg": "Ecriture introuvable."}
+        auteur = e.get("auteur", "?")
+        if act == "admin_ecriture_voir":
+            return {"ok": True, "ecriture": _detail_ecriture(e, num_co), "masquee": bool(e.get("masquee")),
+                    "nb_signalements": int(e.get("nb_signalements", 0) or 0)}
+        if act == "admin_ecriture_masquer":
+            etat = bool(p.get("etat", True))
+            ok = fs_update_ecriture(eid, {"masquee": etat})
+            fs_log_audit(num_co, "ecriture_masquer", auteur, f"id={eid} masquee={etat}")
+            return {"ok": ok, "masquee": etat}
+        if act == "admin_ecriture_supprimer":
+            ok = fs_supprimer_ecriture(eid)
+            fs_log_audit(num_co, "ecriture_supprimer", auteur, f"id={eid} titre={str(e.get('titre',''))[:60]}")
+            return {"ok": ok}
+        if act == "admin_ecriture_commentaire_supprimer":
+            cid = str(p.get("commentaire_id", "") or "").strip()
+            r = _supprimer_commentaire_ecriture(e, cid, num_co, admin=True)
+            if r.get("ok"): fs_log_audit(num_co, "ecriture_commentaire_supprimer", auteur, f"id={eid} commentaire={cid}")
+            return r
+        return {"ok": False, "msg": f"Action inconnue: {act}"}
+    except Exception as ex:
+        print(f"⚠️  Erreur moderation ecritures ({act}): {ex}")
+        return {"ok": False, "msg": "Erreur serveur."}
+
+def traiter_action_ecriture(act, p, num_co):
+    try:
+        return _traiter_ecriture(act, p, num_co)
+    except Exception as e:
+        print(f"⚠️  Erreur ecritures ({act}): {e}")
+        return {"ok": False, "msg": "Erreur serveur."}
+
+# ══════════════════════════════════════════════════════════
 #  FICHIERS LOCAUX (temporaires)
 # ══════════════════════════════════════════════════════════
 FILES_DIR = os.path.join(os.path.expanduser("~"), ".termchat_files")
@@ -986,7 +1400,7 @@ connexions_en_attente_totp = {}  # conn -> {"uid": str, "ip": str}
 appareils_bloques_cache = set()  # device_id bloques, charge au demarrage + maj live
 lock             = threading.Lock()
 TIMEOUT          = 1800
-MAX_CONNEXIONS_SIMULTANEES = 500  # au-dela, nouvelles connexions refusees (protection DoS)
+MAX_CONNEXIONS_SIMULTANEES = int(os.environ.get("MAX_CONNEXIONS", "500"))  # au-dela, nouvelles connexions refusees (protection DoS)
 connexions_count = 0
 connexions_lock = threading.Lock()
 MAX_TAILLE_BUFFER = MAX_BUFFER_BYTES
@@ -1069,6 +1483,16 @@ except Exception:
     ADMIN_ALLOWED_IPS = []
 
 def limite_depassee(cle, limite, fenetre_sec):
+    if _redis_dispo():
+        try:
+            now = time.time()
+            return bool(_lua_rl(keys=[f"tc:rl:{cle}"],
+                                args=[now, fenetre_sec, limite, f"{now}:{uuid.uuid4().hex[:6]}"]))
+        except Exception as e:
+            _redis_panne(e)
+    return _limite_depassee_locale(cle, limite, fenetre_sec)
+
+def _limite_depassee_locale(cle, limite, fenetre_sec):
     maintenant = time.time()
     with lock:
         serie = [t for t in rate_limits.get(cle, []) if maintenant - t < fenetre_sec]
@@ -1079,6 +1503,24 @@ def limite_depassee(cle, limite, fenetre_sec):
         rate_limits[cle] = serie
         return False
 
+def _boucle_nettoyage():
+    """Toutes les 10 min : vide les vieux compteurs anti-spam et le cache utilisateurs."""
+    while True:
+        time.sleep(600)
+        try:
+            maintenant = time.time()
+            with lock:
+                for cle in list(rate_limits.keys()):
+                    serie = rate_limits[cle]
+                    if not serie or maintenant - serie[-1] > 7200:
+                        del rate_limits[cle]
+            with _cache_users_lock:
+                for num in [n for n, e in _cache_users.items() if maintenant - e[0] > _CACHE_USERS_TTL]:
+                    e = _cache_users.pop(num)
+                    _cache_users_uid.pop(e[1], None)
+        except Exception as ex:
+            print(f"⚠️  Erreur nettoyage (ignoree): {ex}")
+
 def ip_autorisee_pour_admin(ip):
     if not ADMIN_ALLOWED_IPS:
         return True
@@ -1088,38 +1530,351 @@ def ip_autorisee_pour_admin(ip):
     except ValueError:
         return False
 
-envoi_lock = threading.Lock()
+# Verrou d'envoi PAR connexion : un client lent ne bloque plus les autres
+_envoi_locks = _weakref.WeakKeyDictionary()
+_envoi_locks_garde = threading.Lock()
+_envoi_lock_secours = threading.Lock()
+
+def _verrou_envoi(sock):
+    with _envoi_locks_garde:
+        try:
+            v = _envoi_locks.get(sock)
+            if v is None:
+                v = threading.Lock()
+                _envoi_locks[sock] = v
+            return v
+        except TypeError:   # socket non « weakref-able » : verrou commun de secours
+            return _envoi_lock_secours
+
 
 def envoyer_srv(sock, paquet):
     try:
         data = (json.dumps(paquet, ensure_ascii=False) + "\n").encode()
-        with envoi_lock:
+        with _verrou_envoi(sock):
             sock.sendall(data)
     except Exception as e:
         print(f"ECHEC ENVOI: {e} | paquet={paquet}")
         return False
     return True
 
-def livrer(numero, paquet):
-    with lock:
-        s = clients.get(numero)
+# ══════════════════════════════════════════════════════════
+#  REDIS (étape 3, optionnel) — actif seulement si REDIS_URL est défini
+# ══════════════════════════════════════════════════════════
+REDIS_URL = os.environ.get("REDIS_URL", "")
+SERVER_ID = os.environ.get("SERVER_ID") or uuid.uuid4().hex[:8]
+_redis = None
+_redis_ko_jusqua = 0.0
+_lua_rl = None
+_LUA_RATE = """
+local k = KEYS[1]
+local now = tonumber(ARGV[1])
+local win = tonumber(ARGV[2])
+local lim = tonumber(ARGV[3])
+redis.call('ZREMRANGEBYSCORE', k, 0, now - win)
+if redis.call('ZCARD', k) >= lim then return 1 end
+redis.call('ZADD', k, now, ARGV[4])
+redis.call('EXPIRE', k, math.ceil(win) + 1)
+return 0
+"""
 
+def _redis_dispo():
+    return _redis is not None and time.time() >= _redis_ko_jusqua
+
+def _redis_panne(e):
+    global _redis_ko_jusqua
+    _redis_ko_jusqua = time.time() + 10
+    print(f"⚠️  Redis indisponible (repli local pendant 10 s): {e}")
+
+def _cle_en_ligne(numero):
+    return f"tc:en_ligne:{numero}"
+
+def _redis_init():
+    global _redis, _lua_rl
+    if not REDIS_URL:
+        return False
+    try:
+        import redis as _redis_mod
+        r = _redis_mod.Redis.from_url(REDIS_URL, decode_responses=True,
+                                      socket_connect_timeout=3, socket_timeout=3)
+        r.ping()
+        _lua_rl = r.register_script(_LUA_RATE)
+        _redis = r
+        print(f"🟥 Redis connecte (serveur {SERVER_ID})")
+        return True
+    except ImportError:
+        print("⚠️  REDIS_URL defini mais le module redis manque (pip install redis). Mode local.")
+    except Exception as e:
+        print(f"⚠️  Redis injoignable ({e}). Mode local.")
+    return False
+
+def _presence_marquer(numero):
+    if not _redis_dispo(): return
+    try: _redis.set(_cle_en_ligne(numero), SERVER_ID, ex=120)
+    except Exception as e: _redis_panne(e)
+
+def _presence_retirer(numero):
+    if not _redis_dispo(): return
+    with lock: encore_local = numero in clients
+    if encore_local: return
+    try:
+        if _redis.get(_cle_en_ligne(numero)) == SERVER_ID:
+            _redis.delete(_cle_en_ligne(numero))
+    except Exception as e: _redis_panne(e)
+
+def _en_ligne_parmi(candidats):
+    """Sous-ensemble des numéros connectés (sur CE serveur ou sur un autre)."""
+    candidats = list(candidats)
+    with lock: res = {n for n in candidats if n in clients}
+    if _redis_dispo():
+        reste = [n for n in candidats if n not in res]
+        if reste:
+            try:
+                pipe = _redis.pipeline(transaction=False)
+                for n in reste: pipe.exists(_cle_en_ligne(n))
+                for n, present in zip(reste, pipe.execute()):
+                    if present: res.add(n)
+            except Exception as e: _redis_panne(e)
+    return res
+
+def _tous_en_ligne():
+    with lock: res = set(clients.keys())
+    if _redis_dispo():
+        try:
+            pre = "tc:en_ligne:"
+            for k in _redis.scan_iter(match=pre + "*", count=1000):
+                res.add(k[len(pre):])
+        except Exception as e: _redis_panne(e)
+    return res
+
+def _nb_en_ligne():
+    with lock: n = len(clients)
+    if _redis_dispo():
+        try:
+            moi = f"tc:nb:{SERVER_ID}"
+            for k in _redis.scan_iter(match="tc:nb:*", count=100):
+                if k != moi: n += int(_redis.get(k) or 0)
+        except Exception as e: _redis_panne(e)
+    return n
+
+def _livrer_local(numero, paquet):
+    with lock: s = clients.get(numero)
     if s:
         envoyer_srv(s, paquet)
         return True
-
     return False
 
+def _livrer_distant(numero, paquet):
+    if not _redis_dispo(): return False
+    try:
+        srv = _redis.get(_cle_en_ligne(numero))
+        if not srv or srv == SERVER_ID: return False
+        nb = _redis.publish(f"tc:srv:{srv}", json.dumps({"a": numero, "p": paquet}, ensure_ascii=False))
+        return nb > 0
+    except Exception as e:
+        _redis_panne(e); return False
+
+def livrer(numero, paquet):
+    return _livrer_local(numero, paquet) or _livrer_distant(numero, paquet)
+
+def _kick_local(numero):
+    with lock: s = clients.get(numero)
+    if not s: return False
+    envoyer_srv(s, {"type": "kick", "msg": "Deconnecte par l'administrateur."})
+    try: s.close()
+    except Exception: pass
+    return True
+
+def _kick_distant(numero):
+    if not _redis_dispo(): return False
+    try:
+        srv = _redis.get(_cle_en_ligne(numero))
+        if not srv or srv == SERVER_ID: return False
+        return _redis.publish(f"tc:srv:{srv}", json.dumps({"k": numero})) > 0
+    except Exception as e:
+        _redis_panne(e); return False
+
+def _diffuser_autres_serveurs(paquet):
+    if not _redis_dispo(): return
+    try: _redis.publish("tc:diffusion", json.dumps({"de": SERVER_ID, "p": paquet}, ensure_ascii=False))
+    except Exception as e: _redis_panne(e)
+
+def _boucle_redis_abonne():
+    """Reçoit les messages venant des autres serveurs et les remet aux clients locaux."""
+    while True:
+        try:
+            ps = _redis.pubsub(ignore_subscribe_messages=True)
+            ps.subscribe(f"tc:srv:{SERVER_ID}", "tc:diffusion")
+            while True:
+                m = ps.get_message(timeout=1.0)
+                if not m: continue
+                try: d = json.loads(m["data"])
+                except Exception: continue
+                if m.get("channel") == "tc:diffusion":
+                    if d.get("de") == SERVER_ID: continue
+                    with lock: socks = list(clients.values())
+                    for s in socks: envoyer_srv(s, d.get("p", {}))
+                elif "k" in d:
+                    _kick_local(d["k"])
+                elif "a" in d:
+                    _livrer_local(d["a"], d.get("p", {}))
+        except Exception as e:
+            print(f"⚠️  Redis (abonnement) interrompu, nouvelle tentative: {e}")
+            time.sleep(3)
+
+def _boucle_redis_coeur():
+    """Toutes les 40 s : prolonge la présence de nos clients et publie notre nombre de connectés."""
+    while True:
+        time.sleep(40)
+        if not _redis_dispo(): continue
+        try:
+            with lock: nums = list(clients.keys())
+            for i in range(0, max(len(nums), 1), 2000):
+                pipe = _redis.pipeline(transaction=False)
+                for n in nums[i:i + 2000]:
+                    k = _cle_en_ligne(n)
+                    pipe.set(k, SERVER_ID, ex=120, nx=True)
+                    pipe.expire(k, 120)
+                pipe.set(f"tc:nb:{SERVER_ID}", len(nums), ex=120)
+                pipe.execute()
+        except Exception as e: _redis_panne(e)
+
+def _redis_demarrer():
+    if _redis_init():
+        threading.Thread(target=_boucle_redis_abonne, daemon=True).start()
+        threading.Thread(target=_boucle_redis_coeur, daemon=True).start()
+
+# ── Notifications push (FCM) — actives si PUSH_ACTIF=1 ─────
+PUSH_ACTIF = os.environ.get("PUSH_ACTIF", "0") == "1"
+PUSH_MAX_TOKENS = 5
+
+# type de paquet -> (titre, modèle du texte, champ du nom de l'expéditeur)
+_PUSH_TYPES = {
+    "message":              ("Nouveau message", "{nom} vous a envoye un message", "de"),
+    "fichier":              ("Nouveau fichier", "{nom} vous a envoye un fichier", "de"),
+    "vocal":                ("Message vocal", "{nom} vous a envoye un vocal", "de"),
+    "msg_groupe":           ("Message de groupe", "{nom} a ecrit dans {groupe}", "de"),
+    "invitation_groupe":    ("Invitation", "Vous etes invite dans {groupe}", None),
+    "canal_post":           ("Nouvelle publication", "Nouvelle publication dans {canal_nom}", None),
+    "message_admin":        ("Message de l'administration", "Vous avez un nouveau message", None),
+    "ecriture_commentaire": ("Nouveau commentaire", "{nom} a commente votre ecriture", "de"),
+}
+
+def _push_envoyer(numero, titre, corps, data):
+    from firebase_admin import messaging
+    docs = list(db.collection("push_tokens").where(filter=FieldFilter("numero", "==", numero)).stream())
+    toks = [(d.id, (d.to_dict() or {}).get("token")) for d in docs]
+    toks = [(i, t) for i, t in toks if t]
+    if not toks: return
+    msg = messaging.MulticastMessage(
+        tokens=[t for _, t in toks],
+        notification=messaging.Notification(title=titre, body=corps),
+        data={k: str(v) for k, v in data.items()},
+        android=messaging.AndroidConfig(priority="high"))
+    envoyer = getattr(messaging, "send_each_for_multicast", None) or getattr(messaging, "send_multicast")
+    rep = envoyer(msg)
+    morts = tuple(c for c in (getattr(messaging, "UnregisteredError", None),
+                              getattr(messaging, "SenderIdMismatchError", None)) if c)
+    for (doc_id, _), r in zip(toks, rep.responses):
+        if not r.success and morts and isinstance(r.exception, morts):
+            try: db.collection("push_tokens").document(doc_id).delete()
+            except Exception: pass
+
+def _push_tache(numero, titre, corps, data):
+    try: _push_envoyer(numero, titre, corps, data)
+    except Exception as e: print(f"⚠️  Push impossible pour {numero}: {e}")
+
+def _push_si_utile(numero, paquet):
+    """Appelé quand la livraison directe a échoué (destinataire hors ligne)."""
+    if not PUSH_ACTIF or not db: return
+    modele = _PUSH_TYPES.get(paquet.get("type"))
+    if not modele: return
+    if limite_depassee(f"push:{numero}", 30, 60): return   # pas de rafale de notifications
+    titre, texte, champ_nom = modele
+    infos = {"nom": paquet.get(champ_nom, "Quelqu'un") if champ_nom else "", "groupe": paquet.get("groupe", "un groupe"),
+             "canal_nom": paquet.get("canal_nom", "un canal")}
+    try: corps = texte.format(**infos)
+    except Exception: corps = titre
+    data = {"type": paquet.get("type", ""), "numero": paquet.get("numero", ""),
+            "id_groupe": paquet.get("id_groupe", ""), "canal_id": paquet.get("canal_id", ""),
+            "ecriture_id": paquet.get("ecriture_id", "")}
+    threading.Thread(target=_push_tache, args=(numero, titre, corps, data), daemon=True).start()
+
+_livrer_sans_push = livrer
+def livrer(numero, paquet):
+    ok = _livrer_sans_push(numero, paquet)
+    if not ok: _push_si_utile(numero, paquet)
+    return ok
+
+def fs_stocker_message_admin(numero, texte, de):
+    """Garde un message admin pour un utilisateur hors ligne (remis a sa prochaine connexion)."""
+    if not db: return False
+    try:
+        db.collection("messages_admin").document(gen_id("madm_")).set({
+            "numero": numero, "texte": texte, "de": de,
+            "heure": horodatage(), "lu": False})
+        return True
+    except Exception as e:
+        print(f"Firestore message_admin: {e}")
+        return False
+
+def livrer_messages_admin_en_attente(numero):
+    """Remet les messages admin gardes (20 max, du plus ancien au plus recent), puis les marque lus."""
+    time.sleep(1.5)  # laisse le client terminer sa connexion
+    if not db: return
+    try:
+        docs = (db.collection("messages_admin")
+                  .where(filter=FieldFilter("numero", "==", numero))
+                  .where(filter=FieldFilter("lu", "==", False))
+                  .limit(20).stream())
+        items = sorted(docs, key=lambda d: (d.to_dict() or {}).get("heure", ""))
+        for d in items:
+            data = d.to_dict() or {}
+            paquet = {"type": "message_admin", "msg": data.get("texte", ""),
+                      "heure": (data.get("heure") or "")[11:16], "differe": True}
+            if _livrer_sans_push(numero, paquet):
+                d.reference.update({"lu": True, "lu_le": horodatage()})
+    except Exception as e:
+        print(f"Firestore messages_admin: {e}")
+
+def traiter_action_push(act, p, num_co):
+    try:
+        if not num_co: return {"ok": False, "msg": "Non connecte."}
+        if not db: return {"ok": False, "msg": "Base de donnees indisponible."}
+        token = str(p.get("token", "") or "").strip()
+        if not (20 <= len(token) <= 4096): return {"ok": False, "msg": "Jeton invalide."}
+        ref = db.collection("push_tokens").document(hashlib.sha256(token.encode()).hexdigest()[:40])
+        if act == "push_enregistrer":
+            if limite_depassee(f"push_reg:{num_co}", 20, 3600):
+                return {"ok": False, "msg": "Trop d'enregistrements. Reessaie plus tard."}
+            # un appareil = un jeton : le dernier utilisateur connecté dessus le garde
+            anciens = sorted((d.to_dict() or {} for d in db.collection("push_tokens")
+                              .where(filter=FieldFilter("numero", "==", num_co)).stream()),
+                             key=lambda x: x.get("date", ""))
+            if len(anciens) >= PUSH_MAX_TOKENS:
+                vieux = hashlib.sha256(anciens[0].get("token", "").encode()).hexdigest()[:40]
+                db.collection("push_tokens").document(vieux).delete()
+            ref.set({"numero": num_co, "token": token,
+                     "plateforme": str(p.get("plateforme", "") or "")[:20], "date": horodatage()})
+            return {"ok": True}
+        doc = ref.get()   # push_retirer
+        if doc.exists and (doc.to_dict() or {}).get("numero") == num_co:
+            ref.delete()
+        return {"ok": True}
+    except Exception as e:
+        print(f"⚠️  Erreur push ({act}): {e}")
+        return {"ok": False, "msg": "Erreur serveur."}
+
 def notifier_statut(numero, en_ligne):
+    if en_ligne: _presence_marquer(numero)
+    else: _presence_retirer(numero)
     uid, user = fs_get_user_by_numero(numero)
     if not user: return
     contacts = set(fs_mes_contacts(numero))
     if not contacts: return
-    with lock: cibles = list(clients.items())
-    for num, sock in cibles:
-        if num != numero and num in contacts:
-            envoyer_srv(sock, {"type": "statut", "numero": numero,
-                               "nom": user.get("nom","?"), "en_ligne": en_ligne})
+    paquet = {"type": "statut", "numero": numero,
+              "nom": user.get("nom","?"), "en_ligne": en_ligne}
+    for num in _en_ligne_parmi(contacts - {numero}):
+        livrer(num, dict(paquet))
 
 # ══════════════════════════════════════════════════════════
 #  RBAC — RÔLES ADMIN
@@ -1132,6 +1887,8 @@ PERMISSIONS_PAR_ROLE = {
     "moderator": {
         "admin_stats", "admin_feedback", "admin_users", "admin_broadcast",
         "admin_kick", "admin_message", "admin_signalements", "admin_traiter_signalement",
+        "admin_ecriture_voir", "admin_ecriture_masquer", "admin_ecriture_supprimer",
+        "admin_ecriture_commentaire_supprimer",
     },
     "payment_admin": {
         "admin_activer_premium", "admin_desactiver_premium",
@@ -1211,6 +1968,8 @@ def _connecter_user(conn, user, uid, ip_client="", device_id=""):
         "verifie": bool(user.get("verifie"))
     })
     notifier_statut(num_co, True)
+    if not str(device_id or "").startswith("AbouAdminGateway"):
+        threading.Thread(target=livrer_messages_admin_en_attente, args=(num_co,), daemon=True).start()
     return num_co, est_admin, admin_role
 
 
@@ -1246,7 +2005,9 @@ def gerer_client(conn, addr):
                 ligne = ligne.strip()
                 if not ligne: continue
                 try: p = json.loads(ligne)
-                except Exception: continue
+                except Exception:
+                    envoyer_srv(conn, {"ok":False,"msg":"Requête invalide."})  # correctif-reponses
+                    continue
 
                 ip_client = addr[0]
                 if not isinstance(p, dict):
@@ -1573,7 +2334,7 @@ def gerer_client(conn, addr):
                                 "statut":trouve.get("statut","disponible") if est_contact else None,
                                 "cle_publique":trouve.get("cle_publique"),
                                 "verifie":bool(trouve.get("verifie")),
-                                "en_ligne":(trouve["numero"] in clients) if est_contact else False}})
+                                "en_ligne":(trouve["numero"] in _en_ligne_parmi([trouve["numero"]])) if est_contact else False}})
 
                 # ─── PUBLIER CLE PUBLIQUE (chiffrement E2E) ──────────────
                 elif act == "publier_cle_publique":
@@ -1613,6 +2374,7 @@ def gerer_client(conn, addr):
                     if num_co:
                         convs = fs_get_conversations(num_co)
                         envoyer_srv(conn, {"ok":True,"conversations":convs})
+                    else: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})  # correctif-reponses
 
                 # ─── EDUMAP (annuaire d'\''ecoles) ────────
                 elif act == "edumap_lister_ecoles":
@@ -1624,16 +2386,17 @@ def gerer_client(conn, addr):
                             e["id"] = d.id
                             if e.get("statut", "publiee") != "publiee":
                                 continue
-                            if "photos_base64" not in e and e.get("photo_base64"):
-                                e["photos_base64"] = [e["photo_base64"]]
-                            ecoles.append(e)
+                            ecoles.append(_edumap_preparer_ecole(e, bool(p.get("sans_photos"))))
                         envoyer_srv(conn, {"ok":True,"ecoles":ecoles})
                     except Exception as e:
                         envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
 
+                elif act == "edumap_photo":
+                    envoyer_srv(conn, edumap_photo_action(p, addr[0]))
+
                 elif act == "edumap_ajouter_ecole":
                     mdp_fourni = p.get("mot_de_passe","")
-                    if not EDUMAP_ADMIN_PASSWORD or mdp_fourni != EDUMAP_ADMIN_PASSWORD:
+                    if not EDUMAP_ADMIN_PASSWORD or not _hmac.compare_digest(str(mdp_fourni).encode(), EDUMAP_ADMIN_PASSWORD.encode()):
                         envoyer_srv(conn, {"ok":False,"msg":"Mot de passe admin incorrect."})
                     else:
                         nom = (p.get("nom") or "").strip()
@@ -1665,7 +2428,10 @@ def gerer_client(conn, addr):
                                         "ajoute_le": horodatage(),
                                         "statut": "publiee",
                                     }
-                                    db.collection("ecoles_edumap").document(ecole_id).set(ecole)
+                                    _edumap_deplacer_photos(ecole_id, ecole)
+                                    try: db.collection("ecoles_edumap").document(ecole_id).set(ecole)
+                                    except Exception:
+                                        _edumap_retirer_photos(ecole_id, ecole); raise
                                     fs_log_audit_complet(num_co or "admin_edumap", "edumap_ajout_ecole", nom, ip_client=addr[0])
                                     envoyer_srv(conn, {"ok":True,"id":ecole_id,"msg":f"Ecole '{nom}' ajoutee."})
                             except Exception as e:
@@ -1707,7 +2473,10 @@ def gerer_client(conn, addr):
                                         "propose_par": num_co,
                                         "propose_par_nom": u.get("nom","?") if u else "?",
                                     }
-                                    db.collection("ecoles_edumap").document(ecole_id).set(ecole)
+                                    _edumap_deplacer_photos(ecole_id, ecole)
+                                    try: db.collection("ecoles_edumap").document(ecole_id).set(ecole)
+                                    except Exception:
+                                        _edumap_retirer_photos(ecole_id, ecole); raise
                                     fs_log_audit_complet(num_co, "edumap_proposition_ecole", nom, ip_client=addr[0])
                                     envoyer_srv(conn, {"ok":True,"id":ecole_id,"msg":f"Ecole '{nom}' proposee, en attente de validation."})
                             except Exception as e:
@@ -1715,7 +2484,7 @@ def gerer_client(conn, addr):
 
                 elif act == "edumap_lister_en_attente":
                     mdp_fourni = p.get("mot_de_passe","")
-                    if not EDUMAP_ADMIN_PASSWORD or mdp_fourni != EDUMAP_ADMIN_PASSWORD:
+                    if not EDUMAP_ADMIN_PASSWORD or not _hmac.compare_digest(str(mdp_fourni).encode(), EDUMAP_ADMIN_PASSWORD.encode()):
                         envoyer_srv(conn, {"ok":False,"msg":"Mot de passe admin incorrect."})
                     else:
                         try:
@@ -1724,14 +2493,14 @@ def gerer_client(conn, addr):
                             ecoles = []
                             for d in docs:
                                 e = d.to_dict(); e["id"] = d.id
-                                ecoles.append(e)
+                                ecoles.append(_edumap_preparer_ecole(e, bool(p.get("sans_photos"))))
                             envoyer_srv(conn, {"ok":True,"ecoles":ecoles})
                         except Exception as e:
                             envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
 
                 elif act == "edumap_approuver_ecole":
                     mdp_fourni = p.get("mot_de_passe","")
-                    if not EDUMAP_ADMIN_PASSWORD or mdp_fourni != EDUMAP_ADMIN_PASSWORD:
+                    if not EDUMAP_ADMIN_PASSWORD or not _hmac.compare_digest(str(mdp_fourni).encode(), EDUMAP_ADMIN_PASSWORD.encode()):
                         envoyer_srv(conn, {"ok":False,"msg":"Mot de passe admin incorrect."})
                     else:
                         ecole_id = p.get("id","").strip()
@@ -1742,6 +2511,7 @@ def gerer_client(conn, addr):
                                 envoyer_srv(conn, {"ok":False,"msg":"Ecole introuvable."})
                             else:
                                 ref.update({"statut":"publiee"})
+                                fs_log_audit_complet(num_co or "admin_edumap", "edumap_approuver_ecole", ecole_id, ip_client=addr[0])
                                 d = doc.to_dict()
                                 if d.get("propose_par"):
                                     livrer(d["propose_par"], {"type":"edumap_approuvee","nom":d.get("nom","?")})
@@ -1751,7 +2521,7 @@ def gerer_client(conn, addr):
 
                 elif act == "edumap_rejeter_ecole":
                     mdp_fourni = p.get("mot_de_passe","")
-                    if not EDUMAP_ADMIN_PASSWORD or mdp_fourni != EDUMAP_ADMIN_PASSWORD:
+                    if not EDUMAP_ADMIN_PASSWORD or not _hmac.compare_digest(str(mdp_fourni).encode(), EDUMAP_ADMIN_PASSWORD.encode()):
                         envoyer_srv(conn, {"ok":False,"msg":"Mot de passe admin incorrect."})
                     else:
                         ecole_id = p.get("id","").strip()
@@ -1761,7 +2531,9 @@ def gerer_client(conn, addr):
                             if not doc.exists:
                                 envoyer_srv(conn, {"ok":False,"msg":"Ecole introuvable."})
                             else:
+                                _edumap_retirer_photos(ecole_id, doc.to_dict() or {})
                                 ref.delete()
+                                fs_log_audit_complet(num_co or "admin_edumap", "edumap_rejeter_ecole", ecole_id, ip_client=addr[0])
                                 envoyer_srv(conn, {"ok":True,"msg":"Proposition rejetee et supprimee."})
                         except Exception as e:
                             envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
@@ -1838,6 +2610,7 @@ def gerer_client(conn, addr):
                             livrer(dest, {"type":"reaction","de":nom_de,
                                           "numero":num_co,"msg_id":msg_id,"emoji":emoji,"heure":heure()})
                             envoyer_srv(conn, {"ok":True})
+                    else: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})  # correctif-reponses
 
                 elif act == "supprimer_message":
                     if not num_co:
@@ -1888,6 +2661,7 @@ def gerer_client(conn, addr):
                         fs_marquer_lus(num_co, avec)
                         livrer(avec, {"type":"lu","par":num_co})
                         envoyer_srv(conn, {"ok":True,"historique":hist})
+                    else: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})  # correctif-reponses
 
                 elif act == "rechercher_msg":
                     if num_co:
@@ -1896,6 +2670,7 @@ def gerer_client(conn, addr):
                         hist = fs_get_messages(num_co, avec, 200)
                         res  = [m for m in hist if mot in m.get("texte","").lower()][-20:]
                         envoyer_srv(conn, {"ok":True,"resultats":res,"total":len(res)})
+                    else: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})  # correctif-reponses
 
                 elif act == "effacer_historique":
                     if num_co:
@@ -1909,6 +2684,7 @@ def gerer_client(conn, addr):
                                 batch.commit()
                             except Exception as e: print(f"Firestore erreur: {e}")
                         envoyer_srv(conn, {"ok":True,"msg":"Historique efface."})
+                    else: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})  # correctif-reponses
 
                 # ─── STATUT ───────────────────────────────
                 elif act == "changer_statut":
@@ -1924,11 +2700,10 @@ def gerer_client(conn, addr):
                         else:
                             fs_update_user(uid, {"statut": statut})
                             contacts = set(fs_mes_contacts(num_co))
-                            with lock:
-                                cibles = [(n, s) for n, s in clients.items() if n != num_co and n in contacts]
+                            cibles = _en_ligne_parmi(contacts - {num_co})
                             _, eu = fs_get_user_by_numero(num_co)
-                            for num, sock in cibles:
-                                envoyer_srv(sock, {"type":"statut_change","numero":num_co,
+                            for num in cibles:
+                                livrer(num, {"type":"statut_change","numero":num_co,
                                                    "nom":eu.get("nom","?") if eu else "?","statut":statut})
                             envoyer_srv(conn, {"ok":True,"msg":f"Statut: {statut}"})
 
@@ -1956,13 +2731,15 @@ def gerer_client(conn, addr):
                     if num_co:
                         _, user = fs_get_user_by_numero(num_co)
                         favoris = user.get("favoris",[]) if user else []
-                        with lock: ens = set(clients.keys())
+                        ens = _en_ligne_parmi(favoris)
                         result = []
                         for n in favoris:
                             _, u = fs_get_user_by_numero(n)
                             if u: result.append({"nom":u.get("nom","?"),"numero":n,
                                 "statut":u.get("statut","disponible"),"en_ligne":n in ens})
-                        envoyer_srv(conn, {"ok":True,"favoris":result})
+                        envoyer_srv(conn, {"ok":True,"favoris":result,
+                            "ecritures":[_apercu_ecriture(e, num_co) for e in fs_mes_favoris_ecritures(num_co)]})
+                    else: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})  # correctif-reponses
 
                 # ─── BLOQUER ──────────────────────────────
                 elif act == "bloquer":
@@ -2017,7 +2794,11 @@ def gerer_client(conn, addr):
                                 taille = p.get("taille", 0)
                                 data, _ = decoder_base64_strict(photo_c64, taille, MAX_PHOTO_PROFIL_BYTES)
                                 photo_b64 = base64.b64encode(data).decode("ascii")
-                                fs_update_user(uid, {"photo_profil_base64": photo_b64})
+                                _chemin_photo = f"profils/{uid}.img"
+                                if _photos_actif() and _photo_stocker(_chemin_photo, data):
+                                    fs_update_user(uid, {"photo_profil_base64": None, "photo_profil_path": _chemin_photo})
+                                else:
+                                    fs_update_user(uid, {"photo_profil_base64": photo_b64})
                                 envoyer_srv(conn, {"ok":True,"msg":"Photo de profil mise a jour!","photo_base64":photo_b64})
                             except ValueError as e:
                                 envoyer_srv(conn, {"ok":False,"msg":str(e)})
@@ -2030,7 +2811,8 @@ def gerer_client(conn, addr):
                         if not uid:
                             envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
                         else:
-                            fs_update_user(uid, {"photo_profil_base64": None})
+                            fs_update_user(uid, {"photo_profil_base64": None, "photo_profil_path": None})
+                            if _photos_actif(): _photo_retirer(f"profils/{uid}.img")
                             envoyer_srv(conn, {"ok":True,"msg":"Photo de profil retiree."})
 
 
@@ -2214,8 +2996,7 @@ def gerer_client(conn, addr):
                         envoyer_srv(conn, {"ok":False,"msg":"Non connecté."})
                     else:
                         contacts = set(fs_mes_contacts(num_co))
-                        with lock:
-                            liste = [n for n in clients.keys() if n in contacts and n != num_co]
+                        liste = list(_en_ligne_parmi(contacts - {num_co}))
                         result = []
                         for n in liste:
                             _, u = fs_get_user_by_numero(n)
@@ -2233,6 +3014,7 @@ def gerer_client(conn, addr):
                             fs_save_groupe(gid, {"nom":nom_g,"createur":num_co,"membres":[num_co],
                                 "creation":horodatage(),"epingle":None,"derniere_activite":horodatage()})
                             envoyer_srv(conn, {"ok":True,"id_groupe":gid,"nom":nom_g})
+                    else: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})  # correctif-reponses
 
                 elif act == "ajouter_groupe":
                     if not num_co:
@@ -2512,6 +3294,10 @@ def gerer_client(conn, addr):
                         else:
                             envoyer_srv(conn, {"ok":True,"commentaires":fs_get_commentaires_canal(cid, post_id)})
 
+                # ─── ÉCRITURES ────────────────────────────
+                elif act.startswith("ecriture_") or act == "mes_ecritures":
+                    envoyer_srv(conn, traiter_action_ecriture(act, p, num_co))
+
                 # ─── PREMIUM (abonnement) ──────────────────
                 elif act == "verifier_mon_abonnement":
                     if not num_co: envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
@@ -2633,7 +3419,7 @@ def gerer_client(conn, addr):
                     if not a_permission(admin_role, "admin_stats"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         stats = fs_get_stats()
-                        with lock: stats["en_ligne"] = len(clients)
+                        stats["en_ligne"] = _nb_en_ligne()
                         envoyer_srv(conn, {"ok":True,"stats":stats})
 
                 elif act == "admin_feedback":
@@ -2646,7 +3432,7 @@ def gerer_client(conn, addr):
                     else:
                         if db:
                             try:
-                                with lock: ens = set(clients.keys())
+                                ens = _tous_en_ligne()
                                 docs  = db.collection("users").stream()
                                 users = []
                                 for doc in docs:
@@ -2654,7 +3440,9 @@ def gerer_client(conn, addr):
                                     users.append({"nom":u.get("nom","?"),"numero":u.get("numero","?"),"pays":u.get("pays",""),
                                         "inscription":(u.get("inscription") or "")[:10],
                                         "en_ligne":u.get("numero") in ens,
-                                        "pays_incoherent":u.get("pays_incoherent", False)})
+                                        "pays_incoherent":u.get("pays_incoherent", False),
+                                        "role":((u.get("role") or "super_admin") if u.get("est_admin") else None),
+                                        "verifie":bool(u.get("verifie", False))})
                                 envoyer_srv(conn, {"ok":True,"users":users})
                             except Exception as e: envoyer_srv(conn, {"ok":False,"msg":str(e)})
 
@@ -2671,9 +3459,10 @@ def gerer_client(conn, addr):
                             continue
                         with lock: tous = list(clients.values())
                         for s in tous: envoyer_srv(s, {"type":"annonce","msg":msg,"heure":heure()})
+                        _diffuser_autres_serveurs({"type":"annonce","msg":msg,"heure":heure()})
                         signaler_echec(cle_bf_br)  # incrémente le compteur (5 broadcasts max puis blocage 5min)
-                        fs_log_audit(num_co, "broadcast", details=f"Envoyé à {len(tous)} utilisateurs")
-                        envoyer_srv(conn, {"ok":True,"msg":f"Envoye a {len(tous)} utilisateurs."})
+                        fs_log_audit(num_co, "broadcast", details=f"Envoyé à {_nb_en_ligne()} utilisateurs")
+                        envoyer_srv(conn, {"ok":True,"msg":f"Envoye a {_nb_en_ligne()} utilisateurs."})
 
                 elif act == "admin_kick":
                     if not a_permission(admin_role, "admin_kick"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
@@ -2686,6 +3475,7 @@ def gerer_client(conn, addr):
                             try: s.close()
                             except Exception: pass
                             envoyer_srv(conn, {"ok":True,"msg":"Utilisateur deconnecte."})
+                        elif _kick_distant(cible): envoyer_srv(conn, {"ok":True,"msg":"Utilisateur deconnecte."})
                         else: envoyer_srv(conn, {"ok":False,"msg":"Utilisateur hors ligne."})
 
                 elif act == "admin_message":
@@ -2696,11 +3486,19 @@ def gerer_client(conn, addr):
                         if not texte:
                             envoyer_srv(conn, {"ok":False,"msg":"Message vide."})
                         else:
-                            livre = livrer(cible, {"type":"message_admin","msg":texte,"heure":heure()})
-                            if livre:
-                                envoyer_srv(conn, {"ok":True,"msg":"Message envoye."})
+                            uid_cible, _user_cible = fs_get_user_by_numero(cible)
+                            if len(texte) > 1000:
+                                envoyer_srv(conn, {"ok":False,"msg":"Message trop long (1000 caracteres max)."})
+                            elif not uid_cible:
+                                envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
                             else:
-                                envoyer_srv(conn, {"ok":False,"msg":"Utilisateur hors ligne, message non envoye."})
+                                livre = livrer(cible, {"type":"message_admin","msg":texte,"heure":heure()})
+                                stocke = False if livre else fs_stocker_message_admin(cible, texte, num_co)
+                                if livre or stocke:
+                                    fs_log_audit(num_co, "message_admin", cible, texte[:100])
+                                    envoyer_srv(conn, {"ok":True,"msg":"Message envoye." if livre else "Utilisateur hors ligne : message enregistre, il le recevra a sa prochaine connexion."})
+                                else:
+                                    envoyer_srv(conn, {"ok":False,"msg":"Message non envoye (erreur d'enregistrement)."})
 
                 elif act == "admin_paiements_attente":
                     if not a_permission(admin_role, "admin_paiements_attente"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
@@ -2750,6 +3548,7 @@ def gerer_client(conn, addr):
                             fs_update_user(uid, {"premium":True,"premium_expire":expire,
                                 "premium_type":type_abo,"active_par":num_co})
                             fs_update_paiement(pid, "confirme")
+                            fs_log_audit(num_co, "confirmer_paiement", cible, f"id={pid} montant={paiement.get('montant', '')} type={type_abo}")
                             livrer(cible, {"type":"premium_active","expire":expire or "jamais","premium_type":type_abo,"msg":"Paiement confirme, ton premium est actif!"})
                             envoyer_srv(conn, {"ok":True,"msg":f"Paiement confirme, premium ({type_abo}) active pour {cible}."})
 
@@ -2757,8 +3556,15 @@ def gerer_client(conn, addr):
                     if not a_permission(admin_role, "admin_rejeter_paiement"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
                         pid = p.get("id","").strip()
-                        fs_update_paiement(pid, "rejete")
-                        envoyer_srv(conn, {"ok":True,"msg":"Paiement rejete."})
+                        paiement = fs_get_paiement(pid)
+                        if not paiement:
+                            envoyer_srv(conn, {"ok":False,"msg":"Paiement introuvable."})
+                        elif paiement.get("statut") != "attente":
+                            envoyer_srv(conn, {"ok":False,"msg":"Ce paiement a deja ete traite."})
+                        else:
+                            fs_update_paiement(pid, "rejete")
+                            fs_log_audit(num_co, "rejeter_paiement", paiement.get("numero", ""), f"id={pid} montant={paiement.get('montant', '')}")
+                            envoyer_srv(conn, {"ok":True,"msg":"Paiement rejete."})
 
                 elif act == "admin_surveillance":
                     if not a_permission(admin_role, "admin_surveillance"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
@@ -2837,6 +3643,10 @@ def gerer_client(conn, addr):
                             pass
                         envoyer_srv(conn, {"ok":True,"fichiers":fichiers})
 
+                # ─── NOTIFICATIONS PUSH ───────────────────
+                elif act in ("push_enregistrer", "push_retirer"):
+                    envoyer_srv(conn, traiter_action_push(act, p, num_co))
+
                 elif act == "signaler":
                     if not num_co:
                         envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
@@ -2884,12 +3694,24 @@ def gerer_client(conn, addr):
                     else:
                         sid = p.get("id","").strip()
                         decision = p.get("decision","").strip()  # "archive" ou "kick"
-                        if db and sid:
+                        if not sid or decision not in ("archive", "kick"):
+                            envoyer_srv(conn, {"ok":False,"msg":"Identifiant et decision (archive ou kick) requis."})
+                        elif not db:
+                            envoyer_srv(conn, {"ok":False,"msg":"Base de donnees indisponible."})
+                        else:
                             try:
                                 db.collection("signalements").document(sid).update({"statut": "traite", "decision": decision, "traite_par": num_co, "traite_le": horodatage()})
-                            except Exception:
-                                pass
-                        envoyer_srv(conn, {"ok":True,"msg":f"Signalement {decision}."})
+                                fs_log_audit(num_co, "traiter_signalement", sid, decision)
+                                envoyer_srv(conn, {"ok":True,"msg":f"Signalement {decision}."})
+                            except Exception as e:
+                                print(f"Firestore signalement: {e}")
+                                envoyer_srv(conn, {"ok":False,"msg":"Signalement introuvable ou erreur serveur."})
+
+                # ─── MODÉRATION DES ÉCRITURES ──────────────
+                elif act in ("admin_ecriture_voir", "admin_ecriture_masquer",
+                             "admin_ecriture_supprimer", "admin_ecriture_commentaire_supprimer"):
+                    if not a_permission(admin_role, act): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
+                    else: envoyer_srv(conn, moderation_ecriture_admin(act, p, num_co))
 
                 elif act == "admin_gerer_role":
                     if not a_permission(admin_role, "admin_gerer_role"):
@@ -3032,6 +3854,211 @@ def gerer_client(conn, addr):
 # ══════════════════════════════════════════════════════════
 #  DÉMARRAGE
 # ══════════════════════════════════════════════════════════
+# ── Étape 4 : PROXY protocol v1 (répartiteur de charge) ─────
+_PROXY_RESEAUX = []
+for _x in os.environ.get("PROXY_PROTOCOL_FROM", "").split(","):
+    _x = _x.strip()
+    if _x:
+        try:
+            _PROXY_RESEAUX.append(ipaddress.ip_network(_x, strict=False))
+        except ValueError:
+            print(f"⚠️  PROXY_PROTOCOL_FROM: adresse invalide ignoree: {_x}")
+
+def _proxy_fait_confiance(ip):
+    """Vrai seulement si la connexion vient d'un répartiteur de charge déclaré."""
+    if not _PROXY_RESEAUX:
+        return False
+    try:
+        a = ipaddress.ip_address(ip)
+        return any(a in net for net in _PROXY_RESEAUX)
+    except ValueError:
+        return False
+
+def _lire_entete_proxy(conn):
+    """Lit « PROXY TCP4 ip_client ip_serveur port_client port_serveur\r\n ».
+    Renvoie (ip, port) du vrai client, ou None. Lecture octet par octet pour ne
+    pas avaler le début du handshake TLS qui suit."""
+    try:
+        conn.settimeout(3)
+        data = b""
+        while not data.endswith(b"\r\n"):
+            c = conn.recv(1)
+            if not c or len(data) > 107:
+                return None
+            data += c
+        parts = data.decode("ascii", errors="replace").strip().split(" ")
+        if len(parts) >= 6 and parts[0] == "PROXY" and parts[1] in ("TCP4", "TCP6"):
+            ipaddress.ip_address(parts[2])
+            return (parts[2], int(parts[4]))
+    except Exception:
+        return None
+    return None  # « UNKNOWN » (test de santé du répartiteur) ou en-tête invalide
+
+# ── Étape 5 : photos dans Firebase Storage + suivi de la charge ──
+PHOTOS_STORAGE = os.environ.get("PHOTOS_STORAGE", "0") == "1"
+STATS_INTERVALLE = int(os.environ.get("STATS_INTERVALLE", "60"))
+
+def _photos_actif():
+    return PHOTOS_STORAGE and edumap_bucket is not None
+
+def _photo_stocker(chemin, octets):
+    try:
+        type_mime = "image/png" if octets[:4] == b"\x89PNG" else "image/jpeg"
+        edumap_bucket.blob(chemin).upload_from_string(octets, content_type=type_mime)
+        return True
+    except Exception as e:
+        print(f"⚠️  Storage: envoi de {chemin} impossible ({e}); repli sur Firestore")
+        return False
+
+def _photo_retirer(chemin):
+    try:
+        edumap_bucket.blob(chemin).delete()
+    except Exception:
+        pass
+
+def _boucle_stats():
+    """Une ligne de suivi toutes les STATS_INTERVALLE secondes."""
+    while True:
+        time.sleep(STATS_INTERVALLE)
+        try:
+            with lock: nb_clients = len(clients)
+            with connexions_lock: nb_co = connexions_count
+            try:
+                import resource
+                mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024  # Mo (Linux)
+            except Exception:
+                mem = -1
+            cache = len(_cache_users) if "_cache_users" in globals() else 0
+            if "_redis" in globals() and _redis is not None:
+                etat = "ok" if _redis_dispo() else "panne"
+            else:
+                etat = "off"
+            print(f"📊 connexions={nb_co} connectes={nb_clients} memoire_max={mem}Mo "
+                  f"cache_users={cache} redis={etat}")
+        except Exception as e:
+            print(f"⚠️  Erreur suivi (ignoree): {e}")
+
+# ── Edumap : photos des écoles dans Storage + chargement à la demande ──
+import collections as _collections, hmac as _hmac
+EDUMAP_CACHE_MB = int(os.environ.get("EDUMAP_CACHE_MB", "64"))
+_RE_ID_ECOLE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_edumap_cache = _collections.OrderedDict()   # (ecole_id, index) -> octets
+_edumap_cache_octets = 0
+_edumap_cache_lock = threading.Lock()
+
+def _edumap_cache_get(cle):
+    with _edumap_cache_lock:
+        v = _edumap_cache.get(cle)
+        if v is not None: _edumap_cache.move_to_end(cle)
+        return v
+
+def _edumap_cache_put(cle, octets):
+    global _edumap_cache_octets
+    plafond = EDUMAP_CACHE_MB * 1024 * 1024
+    if len(octets) > plafond: return
+    with _edumap_cache_lock:
+        if cle in _edumap_cache: _edumap_cache_octets -= len(_edumap_cache.pop(cle))
+        _edumap_cache[cle] = octets
+        _edumap_cache_octets += len(octets)
+        while _edumap_cache_octets > plafond and _edumap_cache:
+            _, v = _edumap_cache.popitem(last=False)
+            _edumap_cache_octets -= len(v)
+
+def _edumap_cache_vider(ecole_id):
+    global _edumap_cache_octets
+    with _edumap_cache_lock:
+        for cle in [c for c in _edumap_cache if c[0] == ecole_id]:
+            _edumap_cache_octets -= len(_edumap_cache.pop(cle))
+
+def _photo_lire(chemin):
+    try:
+        return edumap_bucket.blob(chemin).download_as_bytes()
+    except Exception as e:
+        print(f"⚠️  Storage: lecture de {chemin} impossible ({e})")
+        return None
+
+def _edumap_photo_octets(ecole_id, index, chemin):
+    cle = (ecole_id, index)
+    octets = _edumap_cache_get(cle)
+    if octets is None and edumap_bucket is not None:
+        octets = _photo_lire(chemin)
+        if octets: _edumap_cache_put(cle, octets)
+    return octets
+
+def _edumap_deplacer_photos(ecole_id, ecole):
+    """Avant l'enregistrement : met les photos dans Storage (si activé). Repli Firestore si échec."""
+    if not _photos_actif() or not ecole.get("photos_base64"): return
+    try:
+        octets = [base64.b64decode(b) for b in ecole["photos_base64"]]
+    except Exception:
+        return
+    chemins = []
+    for i, data in enumerate(octets):
+        ch = f"ecoles/{ecole_id}/{i}.img"
+        if not _photo_stocker(ch, data):
+            for c in chemins: _photo_retirer(c)
+            return
+        chemins.append(ch)
+    ecole["photos_paths"] = chemins
+    ecole["nb_photos"] = len(chemins)
+    ecole.pop("photos_base64", None)
+
+def _edumap_retirer_photos(ecole_id, ecole):
+    if _photos_actif():
+        for ch in (ecole.get("photos_paths") or []): _photo_retirer(ch)
+    _edumap_cache_vider(ecole_id)
+
+def _edumap_preparer_ecole(e, sans_photos):
+    """Prépare une école pour le client : légère (nb_photos) ou complète (comme avant)."""
+    paths = e.pop("photos_paths", None) or []
+    legacy = e.get("photos_base64")
+    if legacy is None and e.get("photo_base64"): legacy = [e["photo_base64"]]
+    e["nb_photos"] = len(paths) or len(legacy or [])
+    if sans_photos:
+        e["photos_base64"] = []
+        e.pop("photo_base64", None)
+    elif paths:
+        sortie = []
+        for i, ch in enumerate(paths):
+            b = _edumap_photo_octets(e.get("id"), i, ch)
+            if b: sortie.append(base64.b64encode(b).decode("ascii"))
+        e["photos_base64"] = sortie
+    else:
+        e["photos_base64"] = legacy or []
+    return e
+
+def edumap_photo_action(p, ip):
+    try:
+        if not db: return {"ok": False, "msg": "Base de donnees indisponible."}
+        if limite_depassee(f"edumap_photo:{ip}", 120, 60):
+            return {"ok": False, "msg": "Trop de demandes. Reessaie dans un instant."}
+        ecole_id = str(p.get("id", "") or "").strip()
+        try: index = int(p.get("index", 0))
+        except (TypeError, ValueError): return {"ok": False, "msg": "Index invalide."}
+        if not _RE_ID_ECOLE.match(ecole_id) or index < 0 or index > 9:
+            return {"ok": False, "msg": "Photo introuvable."}
+        doc = db.collection("ecoles_edumap").document(ecole_id).get()
+        if not doc.exists: return {"ok": False, "msg": "Photo introuvable."}
+        e = doc.to_dict() or {}
+        if e.get("statut", "publiee") != "publiee":
+            mdp = str(p.get("mot_de_passe", "") or "")
+            if not EDUMAP_ADMIN_PASSWORD or not _hmac.compare_digest(mdp.encode(), EDUMAP_ADMIN_PASSWORD.encode()):
+                return {"ok": False, "msg": "Photo introuvable."}
+        paths = e.get("photos_paths") or []
+        if paths:
+            if index >= len(paths): return {"ok": False, "msg": "Photo introuvable."}
+            octets = _edumap_photo_octets(ecole_id, index, paths[index])
+            if not octets: return {"ok": False, "msg": "Photo indisponible."}
+            b64, nb = base64.b64encode(octets).decode("ascii"), len(paths)
+        else:
+            legacy = e.get("photos_base64") or ([e["photo_base64"]] if e.get("photo_base64") else [])
+            if index >= len(legacy): return {"ok": False, "msg": "Photo introuvable."}
+            b64, nb = legacy[index], len(legacy)
+        return {"ok": True, "id": ecole_id, "index": index, "photo_base64": b64, "nb_photos": nb}
+    except Exception as ex:
+        print(f"⚠️  Erreur edumap_photo: {ex}")
+        return {"ok": False, "msg": "Erreur serveur."}
+
 def gerer_client_tls(conn, addr, ctx):
     """
     Handshake TLS dans le thread du client.
@@ -3039,6 +4066,16 @@ def gerer_client_tls(conn, addr, ctx):
     """
 
     ip, port = addr
+
+    # Étape 4 : vraie adresse du client derrière le répartiteur de charge
+    if _proxy_fait_confiance(ip):
+        _reel = _lire_entete_proxy(conn)
+        if _reel is None:
+            try: conn.close()
+            except Exception: pass
+            return
+        addr = _reel
+        ip, port = addr
 
     print(
         f"🔌 Nouvelle connexion TCP : {ip}:{port}"
@@ -3144,7 +4181,7 @@ def main():
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-    srv.bind((BIND_HOST, PORT)); srv.listen(512)
+    srv.bind((BIND_HOST, PORT)); srv.listen(int(os.environ.get("LISTEN_BACKLOG", "512")))
 
     ctx = None
     if os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
@@ -3168,6 +4205,10 @@ def main():
         print("❌ Démarrage refusé: TLS requis mais indisponible.")
         sys.exit(1)
 
+    threading.Thread(target=_boucle_nettoyage, daemon=True).start()
+    _redis_demarrer()
+    if STATS_INTERVALLE > 0:
+        threading.Thread(target=_boucle_stats, daemon=True).start()
     def quitter(sig, frame): srv.close(); sys.exit(0)
     signal.signal(signal.SIGINT, quitter); signal.signal(signal.SIGTERM, quitter)
     while True:
