@@ -2801,7 +2801,7 @@ def gerer_client(conn, addr):
                                 # peuvent envoyer "photo_base64".
                                 photo_c64 = p.get("photo_base64") or p.get("photo") or ""
                                 taille = p.get("taille", 0)
-                                data, _ = decoder_base64_strict(photo_c64, taille, MAX_PHOTO_PROFIL_BYTES)
+                                data, _ = decoder_base64_strict(photo_c64, 0, MAX_PHOTO_PROFIL_BYTES)
                                 photo_b64 = base64.b64encode(data).decode("ascii")
                                 _chemin_photo = f"profils/{uid}.img"
                                 if _photos_actif() and _photo_stocker(_chemin_photo, data):
