@@ -97,7 +97,7 @@ MAX_ECRITURE_TEXTE_LEN = int(os.environ.get("MAX_ECRITURE_TEXTE_LEN", "10000"))
 MAX_ECRITURE_COMMENTAIRE_LEN = int(os.environ.get("MAX_ECRITURE_COMMENTAIRE_LEN", "500"))
 MAX_ECRITURE_PHOTO_BYTES = int(os.environ.get("MAX_ECRITURE_PHOTO_BYTES", str(400 * 1024)))
 ECRITURES_PAGE = int(os.environ.get("ECRITURES_PAGE", "20"))
-MAX_PHOTO_PROFIL_BYTES = int(os.environ.get("MAX_PHOTO_PROFIL_BYTES", str(300 * 1024)))
+MAX_PHOTO_PROFIL_BYTES = int(os.environ.get("MAX_PHOTO_PROFIL_BYTES", str(400 * 1024)))
 MAX_FILES_DIR_BYTES = int(os.environ.get("MAX_FILES_DIR_BYTES", str(256 * 1024 * 1024)))
 MAX_FILE_RETENTION_SECONDS = int(os.environ.get("MAX_FILE_RETENTION_SECONDS", str(24 * 3600)))
 GLOBAL_ACTIONS_PER_MIN = int(os.environ.get("GLOBAL_ACTIONS_PER_MIN", "180"))
@@ -2796,7 +2796,10 @@ def gerer_client(conn, addr):
                             envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
                         else:
                             try:
-                                photo_c64 = p.get("photo_base64","")
+                                # Compatibilite avec les anciennes APK :
+                                # elles envoient "photo", tandis que les nouvelles
+                                # peuvent envoyer "photo_base64".
+                                photo_c64 = p.get("photo_base64") or p.get("photo") or ""
                                 taille = p.get("taille", 0)
                                 data, _ = decoder_base64_strict(photo_c64, taille, MAX_PHOTO_PROFIL_BYTES)
                                 photo_b64 = base64.b64encode(data).decode("ascii")
@@ -2809,7 +2812,7 @@ def gerer_client(conn, addr):
                             except ValueError as e:
                                 envoyer_srv(conn, {"ok":False,"msg":str(e)})
 
-                elif act == "retirer_photo_profil":
+                elif act in ("retirer_photo_profil", "supprimer_photo_profil"):
                     if not num_co:
                         envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
                     else:
