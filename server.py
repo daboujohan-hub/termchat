@@ -654,28 +654,22 @@ def fs_charger_appareils_bloques():
         print(f"Firestore erreur (chargement appareils bloques): {e}"); return set()
 
 def fs_bloquer_appareil(device_id, raison=""):
-    if not db or not device_id:
-        return False
+    if not db or not device_id: return
     try:
         db.collection("appareils_bloques").document(device_id).set({
             "bloque_le": horodatage(), "raison": raison
         })
         appareils_bloques_cache.add(device_id)
-        return True
     except Exception as e:
         print(f"Firestore erreur (blocage appareil): {e}")
-        return False
 
 def fs_debloquer_appareil(device_id):
-    if not db or not device_id:
-        return False
+    if not db or not device_id: return
     try:
         db.collection("appareils_bloques").document(device_id).delete()
         appareils_bloques_cache.discard(device_id)
-        return True
     except Exception as e:
         print(f"Firestore erreur (deblocage appareil): {e}")
-        return False
 
 def fs_log_audit(admin_numero, action, cible="", details=""):
     """Enregistre une action admin dans le journal d'audit (jamais modifiable/supprimable via l'app)."""
@@ -3763,11 +3757,9 @@ def gerer_client(conn, addr):
                         if not cible_did:
                             envoyer_srv(conn, {"ok":False,"msg":"Identifiant d'appareil requis."})
                         else:
-                            if fs_bloquer_appareil(cible_did, raison):
-                                fs_log_audit(num_co, "bloquer_appareil", cible_did, raison)
-                                envoyer_srv(conn, {"ok":True,"msg":f"Appareil {cible_did} bloque."})
-                            else:
-                                envoyer_srv(conn, {"ok":False,"msg":"Blocage impossible : Firestore indisponible ou erreur d'ecriture."})
+                            fs_bloquer_appareil(cible_did, raison)
+                            fs_log_audit(num_co, "bloquer_appareil", cible_did, raison)
+                            envoyer_srv(conn, {"ok":True,"msg":f"Appareil {cible_did} bloque."})
 
                 elif act == "admin_debloquer_appareil":
                     if not a_permission(admin_role, "admin_debloquer_appareil"):
@@ -3777,11 +3769,9 @@ def gerer_client(conn, addr):
                         if not cible_did:
                             envoyer_srv(conn, {"ok":False,"msg":"Identifiant d'appareil requis."})
                         else:
-                            if fs_debloquer_appareil(cible_did):
-                                fs_log_audit(num_co, "debloquer_appareil", cible_did, "")
-                                envoyer_srv(conn, {"ok":True,"msg":f"Appareil {cible_did} debloque."})
-                            else:
-                                envoyer_srv(conn, {"ok":False,"msg":"Deblocage impossible : Firestore indisponible ou erreur d'ecriture."})
+                            fs_debloquer_appareil(cible_did)
+                            fs_log_audit(num_co, "debloquer_appareil", cible_did, "")
+                            envoyer_srv(conn, {"ok":True,"msg":f"Appareil {cible_did} debloque."})
 
                 elif act == "admin_creer_compte":
                     if not a_permission(admin_role, "admin_creer_compte"):
