@@ -2391,6 +2391,33 @@ def panel_admin():
                     erreur(rep.get("msg", "?") if rep else "?")
             entree()
 
+        elif choix == "m":
+            numero = input("Numéro du compte dont réinitialiser le mot de passe: ").strip()
+            print("⚠️  Cette opération remplace le mot de passe actuel du compte.")
+            confirmation = input("Confirmer ? (o/n): ").strip().lower()
+
+            if confirmation == "o":
+                nouveau_mdp = getpass.getpass("Nouveau mot de passe temporaire: ").strip()
+
+                if not nouveau_mdp:
+                    erreur("Mot de passe vide.")
+                else:
+                    envoyer_cli({
+                        "action": "admin_reinitialiser_mdp",
+                        "numero": numero,
+                        "nouveau_mdp": nouveau_mdp
+                    })
+                    rep = attendre()
+
+                    if rep and rep.get("ok"):
+                        succes(rep.get("msg", "Mot de passe réinitialisé."))
+                    else:
+                        erreur(rep.get("msg", "?") if rep else "?")
+            else:
+                print("Opération annulée.")
+
+            entree()
+
         elif choix == "v":
             numero = input("Numéro du compte: ").strip()
             print("  1 — Attribuer le badge vérifié  |  2 — Retirer le badge")

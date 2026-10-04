@@ -3823,6 +3823,30 @@ def gerer_client(conn, addr):
                             envoyer_srv(conn, {"ok":True,"numero":numero,"nom":nom,"pseudo":pseudo,
                                 "msg":f"Compte admin cree: {numero} (@{pseudo}, role: {role_cible}). Note bien ce numero pour le communiquer."})
 
+                elif act == "admin_reinitialiser_mdp":
+                    if not a_permission(admin_role, "admin_reinitialiser_mdp"):
+                        envoyer_srv(conn, {"ok":False,"msg":"Acces refuse. Seul le super-admin peut reinitialiser un mot de passe."})
+                    else:
+                        cible = p.get("numero","").strip()
+                        nouveau_mdp = p.get("nouveau_mdp","").strip()
+
+                        if not cible:
+                            envoyer_srv(conn, {"ok":False,"msg":"Numero de compte manquant."})
+                        elif not mot_de_passe_est_fort(nouveau_mdp):
+                            envoyer_srv(conn, {"ok":False,"msg":f"Mot de passe insuffisamment robuste (min {MIN_PASSWORD_LEN} caracteres, 3 classes)."})
+                        else:
+                            uid_c, user_c = fs_get_user_by_numero(cible)
+
+                            if not uid_c or not user_c:
+                                envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                            else:
+                                fs_update_user(uid_c, {"mdp":hacher(nouveau_mdp)})
+                                fs_log_audit(num_co, "reinitialiser_mdp", cible, "Mot de passe reinitialise par super-admin")
+                                envoyer_srv(conn, {
+                                    "ok":True,
+                                    "msg":f"Mot de passe du compte {cible} reinitialise avec succes."
+                                })
+
                 elif act == "admin_reinitialiser_cle":
                     if not a_permission(admin_role, "admin_reinitialiser_cle"):
                         envoyer_srv(conn, {"ok":False,"msg":"Acces refuse. Seul le super-admin peut reinitialiser une cle publique."})
@@ -3846,16 +3870,30 @@ def gerer_client(conn, addr):
         traceback.print_exc()
     finally:
         if num_co:
+            hors_ligne = False
             with lock:
-                clients.pop(num_co,None)
-                admins_connectes.discard(num_co)
-                if num_co in sessions_par_user:
-                    sessions_par_user[num_co].discard(conn)
-                    if not sessions_par_user[num_co]:
+                sessions = sessions_par_user.get(num_co)
+                if sessions is not None:
+                    sessions.discard(conn)
+                    if not sessions:
                         sessions_par_user.pop(num_co, None)
-                connexions_actives.pop(num_co, None)
-            try: notifier_statut(num_co, False)
-            except Exception: pass
+
+                encore_connecte = bool(sessions_par_user.get(num_co))
+
+                if clients.get(num_co) is conn:
+                    if encore_connecte:
+                        clients[num_co] = next(iter(sessions_par_user[num_co]))
+                    else:
+                        clients.pop(num_co, None)
+
+                if not encore_connecte:
+                    admins_connectes.discard(num_co)
+                    connexions_actives.pop(num_co, None)
+                    hors_ligne = True
+
+            if hors_ligne:
+                try: notifier_statut(num_co, False)
+                except Exception: pass
         try: conn.close()
         except Exception: pass
         with connexions_lock:
