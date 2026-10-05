@@ -2084,7 +2084,7 @@ ROLES_ADMIN = {"super_admin", "moderator", "payment_admin"}
 PERMISSIONS_PAR_ROLE = {
     "super_admin": None,
     "moderator": {
-        "admin_stats", "admin_feedback", "admin_users", "admin_broadcast",
+        "admin_stats", "admin_feedback", "admin_users",
         "admin_kick", "admin_message", "admin_signalements", "admin_traiter_signalement",
         "admin_ecriture_voir", "admin_ecriture_masquer", "admin_ecriture_supprimer",
         "admin_ecriture_commentaire_supprimer",
@@ -4200,6 +4200,37 @@ def gerer_client(conn, addr):
                             fs_update_user(uid_c, {"cle_publique": None})
                             fs_log_audit(num_co, "reinitialiser_cle_publique", cible, "cle publique effacee")
                             envoyer_srv(conn, {"ok":True,"msg":f"Cle publique de {cible} reinitialisee. Elle sera republiee a sa prochaine connexion. Prevenir l'utilisateur : ses contacts devront revalider l'empreinte /empreinte."})
+
+                elif act == "admin_reinitialiser_mdp":
+                    if not a_permission(admin_role, "admin_reinitialiser_mdp"):
+                        envoyer_srv(conn, {"ok":False,"msg":"Acces refuse. Seul le super-admin peut reinitialiser un mot de passe."})
+                    else:
+                        cible = p.get("numero","").strip()
+                        uid_c, user_c = fs_get_user_by_numero(cible)
+                        if not uid_c:
+                            envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
+                        elif cible == num_co or user_c.get("est_admin"):
+                            envoyer_srv(conn, {"ok":False,"msg":"Impossible de reinitialiser le mot de passe d'un administrateur depuis ici."})
+                        else:
+                            temporaire = secrets.token_urlsafe(9) + "aA1!"
+                            fs_update_user(uid_c, {"mdp": hacher(temporaire), "mdp_temporaire": True, "mdp_reinitialise_le": horodatage()})
+                            email_c = (user_c.get("email") or "").strip()
+                            envoye = False
+                            if email_c:
+                                envoye = envoyer_email_resend(email_c, "TermChat : mot de passe temporaire",
+                                    f"<p>Un administrateur a reinitialise ton mot de passe.</p><p>Mot de passe temporaire : <b>{temporaire}</b></p><p>Connecte-toi puis change-le immediatement dans les parametres.</p>")
+                            fs_log_audit(num_co, "reinitialiser_mdp", cible, "envoye par e-mail" if envoye else "affiche a l'administrateur")
+                            with lock: s_c = clients.get(cible)
+                            if s_c:
+                                envoyer_srv(s_c, {"type":"kick","msg":"Deconnecte par l'administrateur."})
+                                try: s_c.close()
+                                except Exception: pass
+                            else:
+                                _kick_distant(cible)
+                            if envoye:
+                                envoyer_srv(conn, {"ok":True,"msg":"Mot de passe temporaire envoye par e-mail a l'utilisateur. Sa session a ete fermee."})
+                            else:
+                                envoyer_srv(conn, {"ok":True,"mdp_temporaire":temporaire,"msg":"Aucun e-mail disponible : transmets ce mot de passe temporaire a l'utilisateur de facon sure. Sa session a ete fermee."})
 
                 else: envoyer_srv(conn, {"ok":False,"msg":f"Action inconnue: {act}"})
 
