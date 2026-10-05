@@ -3192,6 +3192,149 @@ def gerer_client(conn, addr):
                             except Exception as e:
                                 envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
 
+                # ─── TELECHARGER VOCAL HISTORIQUE ─────────
+                elif act == "telecharger_vocal":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok": False, "msg": "Non connecté."})
+                    else:
+                        avec = str(p.get("avec", "") or "").strip()
+                        msg_id = str(p.get("msg_id", "") or "").strip()
+
+                        if not avec or not msg_id:
+                            envoyer_srv(conn, {
+                                "ok": False,
+                                "msg": "Conversation ou message manquant."
+                            })
+                        elif len(msg_id) > 120 or len(avec) > 80:
+                            envoyer_srv(conn, {
+                                "ok": False,
+                                "msg": "Paramètres invalides."
+                            })
+                        elif limite_depassee(f"vocal_dl:{num_co}", 30, 3600):
+                            envoyer_srv(conn, {
+                                "ok": False,
+                                "msg": "Trop de téléchargements. Réessaie plus tard."
+                            })
+                        else:
+                            try:
+                                # La conversation doit contenir l'utilisateur connecté.
+                                if avec == num_co:
+                                    envoyer_srv(conn, {
+                                        "ok": False,
+                                        "msg": "Conversation invalide."
+                                    })
+                                    continue
+
+                                cle = "_".join(sorted([num_co, avec]))
+
+                                if not db:
+                                    envoyer_srv(conn, {
+                                        "ok": False,
+                                        "msg": "Base de données indisponible."
+                                    })
+                                    continue
+
+                                ref = (
+                                    db.collection("historique")
+                                    .document(cle)
+                                    .collection("messages")
+                                    .document(msg_id)
+                                )
+                                doc = ref.get()
+
+                                if not doc.exists:
+                                    envoyer_srv(conn, {
+                                        "ok": False,
+                                        "msg": "Message introuvable."
+                                    })
+                                    continue
+
+                                msg = doc.to_dict() or {}
+
+                                # Autorisation : uniquement les deux participants.
+                                if num_co not in (msg.get("de"), msg.get("vers")):
+                                    envoyer_srv(conn, {
+                                        "ok": False,
+                                        "msg": "Accès refusé."
+                                    })
+                                    continue
+
+                                # Vérifie que le message appartient bien à cette conversation.
+                                if set([str(msg.get("de", "")), str(msg.get("vers", ""))]) != set([num_co, avec]):
+                                    envoyer_srv(conn, {
+                                        "ok": False,
+                                        "msg": "Conversation invalide."
+                                    })
+                                    continue
+
+                                if msg.get("type") != "vocal":
+                                    envoyer_srv(conn, {
+                                        "ok": False,
+                                        "msg": "Ce message n'est pas un vocal."
+                                    })
+                                    continue
+
+                                nom_fich = str(msg.get("nom_fichier", "") or "").strip()
+
+                                # Le nom vient de Firestore, jamais directement de la requête.
+                                nom_fich = os.path.basename(nom_fich)
+
+                                if (
+                                    not nom_fich
+                                    or nom_fich != msg.get("nom_fichier")
+                                    or "/" in nom_fich
+                                    or "\\" in nom_fich
+                                    or ".." in nom_fich
+                                ):
+                                    envoyer_srv(conn, {
+                                        "ok": False,
+                                        "msg": "Fichier vocal invalide."
+                                    })
+                                    continue
+
+                                chemin = os.path.join(FILES_DIR, nom_fich)
+
+                                if not os.path.isfile(chemin):
+                                    envoyer_srv(conn, {
+                                        "ok": False,
+                                        "msg": "Ce message vocal n'est plus disponible sur le serveur."
+                                    })
+                                    continue
+
+                                data = lire_fichier_protege(chemin)
+
+                                if not data:
+                                    envoyer_srv(conn, {
+                                        "ok": False,
+                                        "msg": "Fichier vocal vide."
+                                    })
+                                    continue
+
+                                if len(data) > MAX_UPLOAD_BYTES:
+                                    envoyer_srv(conn, {
+                                        "ok": False,
+                                        "msg": "Fichier vocal trop volumineux."
+                                    })
+                                    continue
+
+                                contenu = base64.b64encode(data).decode("ascii")
+
+                                envoyer_srv(conn, {
+                                    "ok": True,
+                                    "msg_id": msg_id,
+                                    "nom_fichier": nom_fich,
+                                    "contenu": contenu,
+                                    "taille": len(data),
+                                    "duree": int(msg.get("duree", 0) or 0),
+                                })
+
+                            except Exception as e:
+                                print(f"⚠️ Téléchargement vocal impossible: {e}")
+                                envoyer_srv(conn, {
+                                    "ok": False,
+                                    "msg": "Impossible de récupérer le message vocal."
+                                })
+
                 # ─── EN LIGNE ─────────────────────────────
                 elif act == "en_ligne":
                     if not num_co:
