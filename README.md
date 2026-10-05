@@ -1,3 +1,10 @@
+# 💬 TermChat v6.3 - Messagerie Terminal Chiffrée | by DEV.D.A.J
+**TermChat - Messagerie terminal sécurisée open-source créée par Diomandé Abou Johan (DEV.D.A.J / daboujohan-hub) - AbouDev Labs Côte d'Ivoire 🇨🇮**
+
+> **Créateur:** Diomandé Abou Johan (DEV.D.A.J) | **GitHub:** [@daboujohan-hub](https://github.com/daboujohan-hub) | **Site:** aboudev.ci | **Projet phare AbouDev Labs**
+> Messagerie instantanée pour Termux / Terminal Linux : chiffrement bout-en-bout Fernet/AES, bcrypt, TLS, anti-bruteforce. Alternative africaine à WhatsApp pour développeurs.
+
+📖 **Nouveau sur TermChat ?** Lis le [Guide d'utilisation complet](GUIDE_UTILISATEUR.md)
 # 💬 TermChat v6.3
 **Messagerie terminal chiffrée pour développeurs** — by Aboudev Labs 🇨🇮
 
