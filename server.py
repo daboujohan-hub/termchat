@@ -39,6 +39,7 @@ import datetime, time, base64, signal, sys, ssl, secrets
 from pathlib import Path
 import weakref as _weakref, copy as _copy
 import bcrypt
+import requests
 if _GEVENT_ACTIF:
     # bcrypt est un calcul lourd : on le fait dans un vrai thread pour ne pas figer les autres connexions
     import gevent as _gevent
@@ -1785,9 +1786,95 @@ def _push_envoyer(numero, titre, corps, data):
             try: db.collection("push_tokens").document(doc_id).delete()
             except Exception: pass
 
+def _envoyer_notification_push_expo(token, titre, corps, data=None):
+    """Envoie une notification à l'application Expo via l'API HTTP Expo."""
+    if not token:
+        return
+    try:
+        requests.post(
+            "https://exp.host/--/api/v2/push/send",
+            json={
+                "to": token,
+                "title": titre,
+                "body": corps,
+                "data": data or {},
+                "sound": "default",
+            },
+            headers={"Content-Type": "application/json"},
+            timeout=5,
+        )
+    except Exception as e:
+        print(f"Erreur notification push Expo: {e}")
+
+
+def _push_expo_si_utile(numero, paquet):
+    """Notification Expo pour l'application mobile quand le destinataire est hors ligne."""
+    if not PUSH_ACTIF or not db:
+        return
+
+    try:
+        _, user = fs_get_user_by_numero(numero)
+        if not user:
+            return
+
+        token = str(user.get("push_token", "") or "").strip()
+        if not token:
+            return
+
+        type_paquet = str(paquet.get("type", "") or "")
+        nom = str(paquet.get("de", "Quelqu'un") or "Quelqu'un")
+
+        # Le titre demandé par l'application = nom de l'expéditeur.
+        titre = nom
+
+        # Ne jamais mettre le texte déchiffré dans une notification
+        # lorsque le message est chiffré.
+        if type_paquet == "message":
+            if bool(paquet.get("chiffre", False)):
+                corps = "Nouveau message"
+            else:
+                corps = str(paquet.get("texte", "") or "").strip() or "Nouveau message"
+        elif type_paquet in ("fichier", "vocal"):
+            corps = "Nouveau message"
+        else:
+            # Pour les autres notifications, on conserve le comportement
+            # descriptif déjà utilisé par TermChat.
+            modele = _PUSH_TYPES.get(type_paquet)
+            if not modele:
+                return
+            _, texte, champ_nom = modele
+            infos = {
+                "nom": paquet.get(champ_nom, "Quelqu'un") if champ_nom else "",
+                "groupe": paquet.get("groupe", "un groupe"),
+                "canal_nom": paquet.get("canal_nom", "un canal"),
+            }
+            try:
+                corps = texte.format(**infos)
+            except Exception:
+                corps = "Nouveau message"
+
+        data = {
+            "type": type_paquet,
+            "numero": paquet.get("numero", ""),
+            "msg_id": paquet.get("msg_id", ""),
+            "id_groupe": paquet.get("id_groupe", ""),
+            "canal_id": paquet.get("canal_id", ""),
+            "ecriture_id": paquet.get("ecriture_id", ""),
+        }
+
+        _envoyer_notification_push_expo(token, titre, corps, data)
+
+    except Exception as e:
+        print(f"⚠️  Push Expo impossible pour {numero}: {e}")
+
+
 def _push_tache(numero, titre, corps, data):
-    try: _push_envoyer(numero, titre, corps, data)
-    except Exception as e: print(f"⚠️  Push impossible pour {numero}: {e}")
+    # Ancien système FCM : conserve exactement son rôle.
+    try:
+        _push_envoyer(numero, titre, corps, data)
+    except Exception as e:
+        print(f"⚠️  Push FCM impossible pour {numero}: {e}")
+
 
 def _push_si_utile(numero, paquet):
     """Appelé quand la livraison directe a échoué (destinataire hors ligne)."""
@@ -1801,9 +1888,23 @@ def _push_si_utile(numero, paquet):
     try: corps = texte.format(**infos)
     except Exception: corps = titre
     data = {"type": paquet.get("type", ""), "numero": paquet.get("numero", ""),
+            "msg_id": paquet.get("msg_id", ""),
             "id_groupe": paquet.get("id_groupe", ""), "canal_id": paquet.get("canal_id", ""),
-            "ecriture_id": paquet.get("ecriture_id", "")}
-    threading.Thread(target=_push_tache, args=(numero, titre, corps, data), daemon=True).start()
+            "ecriture_id": paquet.get("ecriture_id", ""),
+            "chiffre": bool(paquet.get("chiffre", False))}
+    # Ancien système FCM.
+    threading.Thread(
+        target=_push_tache,
+        args=(numero, titre, corps, data),
+        daemon=True
+    ).start()
+
+    # Nouveau système Expo pour l'application mobile.
+    threading.Thread(
+        target=_push_expo_si_utile,
+        args=(numero, dict(paquet)),
+        daemon=True
+    ).start()
 
 _livrer_sans_push = livrer
 def livrer(numero, paquet):
@@ -1843,29 +1944,121 @@ def livrer_messages_admin_en_attente(numero):
         print(f"Firestore messages_admin: {e}")
 
 def traiter_action_push(act, p, num_co):
+    """Gestion des notifications existantes + nouveau système Expo."""
     try:
-        if not num_co: return {"ok": False, "msg": "Non connecte."}
-        if not db: return {"ok": False, "msg": "Base de donnees indisponible."}
+        if not num_co:
+            return {"ok": False, "msg": "Non connecte."}
+
+        if not db:
+            return {"ok": False, "msg": "Base de donnees indisponible."}
+
+        # ========================================================
+        # NOUVEAU SYSTEME APPLICATION : Expo
+        # ========================================================
+        if act in ("enregistrer_push_token", "supprimer_push_token"):
+            uid, user = fs_get_user_by_numero(num_co)
+
+            if not uid or not user:
+                return {"ok": False, "msg": "Utilisateur introuvable."}
+
+            if act == "enregistrer_push_token":
+                if limite_depassee(f"expo_push_reg:{num_co}", 20, 3600):
+                    return {
+                        "ok": False,
+                        "msg": "Trop d'enregistrements. Reessaie plus tard."
+                    }
+
+                token = str(p.get("token", "") or "").strip()
+                plateforme = str(p.get("plateforme", "") or "").strip().lower()
+
+                if not (20 <= len(token) <= 4096):
+                    return {"ok": False, "msg": "Jeton push invalide."}
+
+                if plateforme not in ("ios", "android"):
+                    return {
+                        "ok": False,
+                        "msg": "Plateforme invalide. Utilise ios ou android."
+                    }
+
+                fs_update_user(uid, {
+                    "push_token": token,
+                    "push_plateforme": plateforme,
+                })
+
+                return {
+                    "ok": True,
+                    "msg": "Jeton push enregistre."
+                }
+
+            # supprimer_push_token ne demande volontairement
+            # aucun token : on vide celui du compte connecté.
+            fs_update_user(uid, {
+                "push_token": "",
+                "push_plateforme": "",
+            })
+
+            return {
+                "ok": True,
+                "msg": "Jeton push supprime."
+            }
+
+        # ========================================================
+        # ANCIEN SYSTEME FCM : CONSERVE POUR LE TERMINAL
+        # ========================================================
         token = str(p.get("token", "") or "").strip()
-        if not (20 <= len(token) <= 4096): return {"ok": False, "msg": "Jeton invalide."}
-        ref = db.collection("push_tokens").document(hashlib.sha256(token.encode()).hexdigest()[:40])
+
+        if not (20 <= len(token) <= 4096):
+            return {"ok": False, "msg": "Jeton invalide."}
+
+        ref = db.collection("push_tokens").document(
+            hashlib.sha256(token.encode()).hexdigest()[:40]
+        )
+
         if act == "push_enregistrer":
             if limite_depassee(f"push_reg:{num_co}", 20, 3600):
-                return {"ok": False, "msg": "Trop d'enregistrements. Reessaie plus tard."}
-            # un appareil = un jeton : le dernier utilisateur connecté dessus le garde
-            anciens = sorted((d.to_dict() or {} for d in db.collection("push_tokens")
-                              .where(filter=FieldFilter("numero", "==", num_co)).stream()),
-                             key=lambda x: x.get("date", ""))
+                return {
+                    "ok": False,
+                    "msg": "Trop d'enregistrements. Reessaie plus tard."
+                }
+
+            anciens = sorted(
+                (
+                    d.to_dict() or {}
+                    for d in db.collection("push_tokens")
+                    .where(filter=FieldFilter("numero", "==", num_co))
+                    .stream()
+                ),
+                key=lambda x: x.get("date", "")
+            )
+
             if len(anciens) >= PUSH_MAX_TOKENS:
-                vieux = hashlib.sha256(anciens[0].get("token", "").encode()).hexdigest()[:40]
+                vieux = hashlib.sha256(
+                    anciens[0].get("token", "").encode()
+                ).hexdigest()[:40]
+
                 db.collection("push_tokens").document(vieux).delete()
-            ref.set({"numero": num_co, "token": token,
-                     "plateforme": str(p.get("plateforme", "") or "")[:20], "date": horodatage()})
-            return {"ok": True}
-        doc = ref.get()   # push_retirer
-        if doc.exists and (doc.to_dict() or {}).get("numero") == num_co:
-            ref.delete()
-        return {"ok": True}
+
+            ref.set({
+                "numero": num_co,
+                "token": token,
+                "plateforme": str(
+                    p.get("plateforme", "") or ""
+                )[:20],
+                "date": horodatage()
+            })
+
+            return {"ok": True, "msg": "Jeton FCM enregistre."}
+
+        if act == "push_retirer":
+            doc = ref.get()
+
+            if doc.exists and (doc.to_dict() or {}).get("numero") == num_co:
+                ref.delete()
+
+            return {"ok": True, "msg": "Jeton FCM supprime."}
+
+        return {"ok": False, "msg": "Action push inconnue."}
+
     except Exception as e:
         print(f"⚠️  Erreur push ({act}): {e}")
         return {"ok": False, "msg": "Erreur serveur."}
@@ -3653,7 +3846,7 @@ def gerer_client(conn, addr):
                         envoyer_srv(conn, {"ok":True,"fichiers":fichiers})
 
                 # ─── NOTIFICATIONS PUSH ───────────────────
-                elif act in ("push_enregistrer", "push_retirer"):
+                elif act in ("push_enregistrer", "push_retirer", "enregistrer_push_token", "supprimer_push_token"):
                     envoyer_srv(conn, traiter_action_push(act, p, num_co))
 
                 elif act == "signaler":
