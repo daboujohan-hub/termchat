@@ -76,6 +76,7 @@ ALLOW_SELF_SIGNED_DEV_CERT = os.environ.get("ALLOW_SELF_SIGNED_DEV_CERT", "0") =
 GEOIP_CHECK_ACTIF = os.environ.get("GEOIP_CHECK_ACTIF", "1") == "1"
 ALLOW_LEGACY_SHA256_LOGIN = os.environ.get("ALLOW_LEGACY_SHA256_LOGIN", "0") == "1"
 ALLOW_INLINE_MEDIA = os.environ.get("ALLOW_INLINE_MEDIA", "0") == "1"
+ALLOW_FILE_SEND = os.environ.get("ALLOW_FILE_SEND", "0") == "1"  # V1 : envoi de fichiers désactivé
 ALLOW_ACCOUNT_DELETION = os.environ.get("ALLOW_ACCOUNT_DELETION", "0") == "1"
 EDUMAP_ADMIN_PASSWORD = os.environ.get("EDUMAP_ADMIN_PASSWORD", "")
 EDUMAP_STORAGE_BUCKET = os.environ.get("EDUMAP_STORAGE_BUCKET", "")
@@ -1560,7 +1561,8 @@ def envoyer_srv(sock, paquet):
         with _verrou_envoi(sock):
             sock.sendall(data)
     except Exception as e:
-        print(f"ECHEC ENVOI: {e} | paquet={paquet}")
+        _t = paquet.get("type", paquet.get("action", "?")) if isinstance(paquet, dict) else "?"
+        print(f"ECHEC ENVOI: {e} | type={_t}")
         return False
     return True
 
@@ -3117,8 +3119,8 @@ def gerer_client(conn, addr):
                         chiffre_f = bool(p.get("chiffre", False))
                         _, exp_user = fs_get_user_by_numero(num_co)
                         _, dest_user = fs_get_user_by_numero(dest)
-                        if not ALLOW_INLINE_MEDIA:
-                            envoyer_srv(conn, {"ok":False,"msg":"Envoi inline de fichiers désactivé en production Internet."})
+                        if not ALLOW_INLINE_MEDIA or not ALLOW_FILE_SEND:
+                            envoyer_srv(conn, {"ok":False,"msg":"Envoi de fichiers bientôt disponible."})
                         elif not est_premium_actif(exp_user):
                             envoyer_srv(conn, {"ok":False,"msg":"Envoi de fichiers réservé au premium."})
                         elif not dest_user:
@@ -3953,25 +3955,6 @@ def gerer_client(conn, addr):
                                 print(f"Firestore alertes: {e}")
                         envoyer_srv(conn, {"ok":True,"alertes":alerts})
 
-                elif act == "admin_voir_conversation":
-                    if not a_permission(admin_role, "admin_voir_conversation"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
-                    else:
-                        n1 = p.get("numero1","").strip()
-                        n2 = p.get("numero2","").strip()
-                        if not n1 or not n2:
-                            envoyer_srv(conn, {"ok":False,"msg":"Deux numéros requis."})
-                        else:
-                            hist = fs_get_messages(n1, n2, 100)
-                            _, u1 = fs_get_user_by_numero(n1)
-                            _, u2 = fs_get_user_by_numero(n2)
-                            noms = {}
-                            if u1: noms[n1] = u1.get("nom", n1)
-                            if u2: noms[n2] = u2.get("nom", n2)
-                            for m in hist:
-                                m["nom_de"] = noms.get(m.get("de"), m.get("de", "?"))
-                            fs_log_audit(num_co, "voir_conversation", f"{n1}_{n2}", "Modération")
-                            envoyer_srv(conn, {"ok":True,"historique":hist,"entre":f"{noms.get(n1,n1)} ↔ {noms.get(n2,n2)}"})
-
                 elif act == "admin_voir_fichiers":
                     if not a_permission(admin_role, "admin_voir_fichiers"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
                     else:
@@ -4162,30 +4145,6 @@ def gerer_client(conn, addr):
                             envoyer_srv(conn, {"ok":True,"numero":numero,"nom":nom,"pseudo":pseudo,
                                 "msg":f"Compte admin cree: {numero} (@{pseudo}, role: {role_cible}). Note bien ce numero pour le communiquer."})
 
-                elif act == "admin_reinitialiser_mdp":
-                    if not a_permission(admin_role, "admin_reinitialiser_mdp"):
-                        envoyer_srv(conn, {"ok":False,"msg":"Acces refuse. Seul le super-admin peut reinitialiser un mot de passe."})
-                    else:
-                        cible = p.get("numero","").strip()
-                        nouveau_mdp = p.get("nouveau_mdp","").strip()
-
-                        if not cible:
-                            envoyer_srv(conn, {"ok":False,"msg":"Numero de compte manquant."})
-                        elif not mot_de_passe_est_fort(nouveau_mdp):
-                            envoyer_srv(conn, {"ok":False,"msg":f"Mot de passe insuffisamment robuste (min {MIN_PASSWORD_LEN} caracteres, 3 classes)."})
-                        else:
-                            uid_c, user_c = fs_get_user_by_numero(cible)
-
-                            if not uid_c or not user_c:
-                                envoyer_srv(conn, {"ok":False,"msg":"Utilisateur introuvable."})
-                            else:
-                                fs_update_user(uid_c, {"mdp":hacher(nouveau_mdp)})
-                                fs_log_audit(num_co, "reinitialiser_mdp", cible, "Mot de passe reinitialise par super-admin")
-                                envoyer_srv(conn, {
-                                    "ok":True,
-                                    "msg":f"Mot de passe du compte {cible} reinitialise avec succes."
-                                })
-
                 elif act == "admin_reinitialiser_cle":
                     if not a_permission(admin_role, "admin_reinitialiser_cle"):
                         envoyer_srv(conn, {"ok":False,"msg":"Acces refuse. Seul le super-admin peut reinitialiser une cle publique."})
@@ -4239,6 +4198,7 @@ def gerer_client(conn, addr):
         print(f"⚠️  Erreur gerer_client: {e}")
         traceback.print_exc()
     finally:
+        connexions_en_attente_totp.pop(conn, None)  # stabilisation 1
         if num_co:
             hors_ligne = False
             with lock:
@@ -4583,7 +4543,7 @@ def gerer_client_tls(conn, addr, ctx):
 
 def main():
     print("╔══════════════════════════════════════════╗")
-    print("║  💬  TERMCHAT v6.1 — SERVEUR (sécurisé)  ║")
+    print("║  💬  TERMCHAT v6.3 — SERVEUR (sécurisé)  ║")
     print("║  by Aboudev Labs 🇨🇮                     ║")
     print("╚══════════════════════════════════════════╝")
     print(f"🔒 Bind: {BIND_HOST}:{PORT} | TLS requis: {REQUIRE_TLS} | Production: {PRODUCTION_MODE}")
