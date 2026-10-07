@@ -2090,6 +2090,8 @@ PERMISSIONS_PAR_ROLE = {
         "admin_kick", "admin_message", "admin_signalements", "admin_traiter_signalement",
         "admin_ecriture_voir", "admin_ecriture_masquer", "admin_ecriture_supprimer",
         "admin_ecriture_commentaire_supprimer",
+        "admin_edumap_en_attente", "admin_edumap_voir",
+        "admin_edumap_approuver", "admin_edumap_rejeter",
     },
     "payment_admin": {
         "admin_activer_premium", "admin_desactiver_premium",
@@ -2738,6 +2740,10 @@ def gerer_client(conn, addr):
                                 envoyer_srv(conn, {"ok":True,"msg":"Proposition rejetee et supprimee."})
                         except Exception as e:
                             envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
+
+                elif act in ("admin_edumap_en_attente", "admin_edumap_voir", "admin_edumap_approuver",
+                           "admin_edumap_rejeter", "admin_edumap_lister", "admin_edumap_supprimer"):
+                    envoyer_srv(conn, traiter_admin_edumap(act, p, num_co, admin_role, addr[0]))
 
                 # ─── MESSAGE ──────────────────────────────
                 elif act == "message":
@@ -4404,6 +4410,79 @@ def _edumap_preparer_ecole(e, sans_photos):
     else:
         e["photos_base64"] = legacy or []
     return e
+
+def traiter_admin_edumap(act, p, num_co, admin_role, ip):
+    """Moderation EduMap par un admin connecte (controle par role, sans mot de passe partage)."""
+    if not a_permission(admin_role, act):
+        return {"ok": False, "msg": "Acces refuse."}
+    if not db:
+        return {"ok": False, "msg": "Base de donnees indisponible."}
+    coll = db.collection("ecoles_edumap")
+    try:
+        if act in ("admin_edumap_en_attente", "admin_edumap_lister"):
+            statut = "en_attente" if act == "admin_edumap_en_attente" else "publiee"
+            avec_photos = bool(p.get("avec_photos")) and act == "admin_edumap_en_attente"
+            ecoles = []
+            for d in coll.stream():
+                e = d.to_dict() or {}
+                e["id"] = d.id
+                if (e.get("statut") or "publiee") != statut:
+                    continue
+                ecoles.append(_edumap_preparer_ecole(e, not avec_photos))
+            ecoles.sort(key=lambda x: str(x.get("ajoute_le", "")), reverse=True)
+            total = len(ecoles)
+            limite = 100 if act == "admin_edumap_en_attente" else 300
+            return {"ok": True, "ecoles": ecoles[:limite], "total": total}
+
+        ecole_id = str(p.get("id", "")).strip()
+        if not ecole_id or "/" in ecole_id or len(ecole_id) > 200:
+            return {"ok": False, "msg": "Identifiant d'ecole invalide."}
+        ref = coll.document(ecole_id)
+        doc = ref.get()
+        if not doc.exists:
+            return {"ok": False, "msg": "Ecole introuvable."}
+        e = doc.to_dict() or {}
+        statut = e.get("statut") or "publiee"
+
+        if act == "admin_edumap_voir":
+            e["id"] = ecole_id
+            return {"ok": True, "ecole": _edumap_preparer_ecole(e, False)}
+
+        if act == "admin_edumap_approuver":
+            if statut != "en_attente":
+                return {"ok": False, "msg": "Cette ecole n'est pas en attente."}
+            maj = {"statut": "publiee", "valide_par": num_co, "valide_le": horodatage()}
+            nom = str(p.get("nom", "")).strip()
+            quartier = str(p.get("quartier", "")).strip()
+            if nom:
+                maj["nom"] = nom[:120]
+            if quartier:
+                maj["quartier"] = quartier[:120]
+            ref.update(maj)
+            _edumap_cache_vider(ecole_id)
+            fs_log_audit_complet(num_co, "admin_edumap_approuver", ecole_id, ip_client=ip)
+            if e.get("propose_par"):
+                livrer(e["propose_par"], {"type": "edumap_approuvee", "nom": maj.get("nom", e.get("nom", "?"))})
+            return {"ok": True, "msg": "Ecole approuvee et publiee."}
+
+        if act == "admin_edumap_rejeter":
+            if statut != "en_attente":
+                return {"ok": False, "msg": "Cette ecole n'est pas en attente."}
+            _edumap_retirer_photos(ecole_id, e)
+            ref.delete()
+            fs_log_audit_complet(num_co, "admin_edumap_rejeter", ecole_id, ip_client=ip)
+            return {"ok": True, "msg": "Proposition rejetee et supprimee."}
+
+        if act == "admin_edumap_supprimer":
+            _edumap_retirer_photos(ecole_id, e)
+            ref.delete()
+            fs_log_audit_complet(num_co, "admin_edumap_supprimer", ecole_id, ip_client=ip)
+            return {"ok": True, "msg": "Ecole supprimee."}
+
+        return {"ok": False, "msg": "Action inconnue."}
+    except Exception as ex:
+        return {"ok": False, "msg": f"Erreur: {ex}"}
+
 
 def edumap_photo_action(p, ip):
     try:
