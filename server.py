@@ -4471,6 +4471,9 @@ def traiter_admin_edumap(act, p, num_co, admin_role, ip):
             _edumap_retirer_photos(ecole_id, e)
             ref.delete()
             fs_log_audit_complet(num_co, "admin_edumap_rejeter", ecole_id, ip_client=ip)
+            if e.get("propose_par"):
+                livrer(e["propose_par"], {"type": "edumap_rejetee", "nom": e.get("nom", "?"),
+                                          "raison": str(p.get("raison", "")).strip()[:200]})
             return {"ok": True, "msg": "Proposition rejetee et supprimee."}
 
         if act == "admin_edumap_supprimer":
