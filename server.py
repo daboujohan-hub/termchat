@@ -2498,6 +2498,13 @@ def gerer_client(conn, addr):
                                 fs_log_audit_complet(num_co, "totp_desactive", "TOTP desactive par l'utilisateur", ip_client=addr[0])
                                 envoyer_srv(conn, {"ok":True,"msg":"TOTP desactive."})
 
+                elif act == "totp_statut":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok":False,"msg":"Non connecte."})
+                    else:
+                        uid, user = fs_get_user_by_numero(num_co)
+                        envoyer_srv(conn, {"ok":True,"actif": bool(uid and user.get("totp_actif"))})
+
                 # ─── DÉCONNEXION ──────────────────────────
                 elif act == "deconnecter":
                     break
