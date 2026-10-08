@@ -2742,7 +2742,7 @@ def gerer_client(conn, addr):
                             envoyer_srv(conn, {"ok":False,"msg":f"Erreur: {e}"})
 
                 elif act in ("admin_edumap_en_attente", "admin_edumap_voir", "admin_edumap_approuver",
-                           "admin_edumap_rejeter", "admin_edumap_lister", "admin_edumap_supprimer"):
+                           "admin_edumap_rejeter", "admin_edumap_lister", "admin_edumap_supprimer", "admin_edumap_ajouter"):
                     envoyer_srv(conn, traiter_admin_edumap(act, p, num_co, admin_role, addr[0]))
 
                 # ─── MESSAGE ──────────────────────────────
@@ -4433,6 +4433,40 @@ def traiter_admin_edumap(act, p, num_co, admin_role, ip):
             total = len(ecoles)
             limite = 100 if act == "admin_edumap_en_attente" else 300
             return {"ok": True, "ecoles": ecoles[:limite], "total": total}
+
+        if act == "admin_edumap_ajouter":
+            nom = str(p.get("nom") or "").strip()[:120]
+            quartier = str(p.get("quartier") or "").strip()[:120]
+            try:
+                lat = float(p.get("lat"))
+                lng = float(p.get("lng"))
+            except (TypeError, ValueError):
+                lat = lng = None
+            if not nom or not quartier or lat is None or lng is None or not (-90 <= lat <= 90 and -180 <= lng <= 180):
+                return {"ok": False, "msg": "Nom, quartier et position GPS requis."}
+            photos = p.get("photos") or []
+            tailles = p.get("photos_tailles") or []
+            if not isinstance(photos, list) or len(photos) > 5:
+                return {"ok": False, "msg": "5 photos maximum."}
+            if not isinstance(tailles, list):
+                tailles = []
+            ecole_id = gen_id("ecole_")
+            photos_b64 = []
+            for i, photo_c64 in enumerate(photos):
+                taille = tailles[i] if i < len(tailles) else 0
+                data, _ = decoder_base64_strict(photo_c64, taille, EDUMAP_MAX_PHOTO_BYTES)
+                photos_b64.append(base64.b64encode(data).decode("ascii"))
+            ecole = {"nom": nom, "quartier": quartier, "lat": lat, "lng": lng,
+                     "photos_base64": photos_b64, "ajoute_le": horodatage(),
+                     "statut": "publiee", "ajoute_par": num_co}
+            _edumap_deplacer_photos(ecole_id, ecole)
+            try:
+                coll.document(ecole_id).set(ecole)
+            except Exception:
+                _edumap_retirer_photos(ecole_id, ecole)
+                raise
+            fs_log_audit_complet(num_co, "admin_edumap_ajouter", nom, ip_client=ip)
+            return {"ok": True, "id": ecole_id, "msg": f"Ecole '{nom}' ajoutee."}
 
         ecole_id = str(p.get("id", "")).strip()
         if not ecole_id or "/" in ecole_id or len(ecole_id) > 200:
