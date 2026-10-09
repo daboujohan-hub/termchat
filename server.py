@@ -2099,6 +2099,41 @@ PERMISSIONS_PAR_ROLE = {
     },
 }
 
+# ── SÉCURITÉ ADMIN ────────────────────────────────────────────────────────────
+ADMIN_SESSION_SECONDES = int(os.environ.get("ADMIN_SESSION_SECONDES", "600"))   # inactivité admin max
+ADMIN_EXIGER_2FA = os.environ.get("ADMIN_EXIGER_2FA", "0") == "1"                # 1 = 2FA obligatoire
+ADMIN_CODE_MIN = 12
+ADMIN_CONFIRMER_ACTIONS = os.environ.get("ADMIN_CONFIRMER_ACTIONS", "1") == "1"   # 0 = désactive l'étape 5
+# Actions qui demandent de retaper le code admin (champ "code_confirm")
+ACTIONS_SENSIBLES = {
+    "admin_kick", "admin_gerer_role", "admin_creer_compte", "admin_reinitialiser_mdp",
+    "admin_reinitialiser_cle", "admin_broadcast", "admin_bloquer_appareil",
+    "admin_debloquer_appareil", "admin_ecriture_supprimer", "admin_ecriture_commentaire_supprimer",
+    "admin_edumap_supprimer", "admin_edumap_ajouter", "admin_rejeter_paiement",
+    "admin_confirmer_paiement", "admin_activer_premium", "admin_desactiver_premium",
+    "admin_voir_conversation",
+}
+
+def code_admin_valide(code):
+    """Règles du code admin : 12 caractères min, lettres + chiffres."""
+    if not isinstance(code, str) or len(code) < ADMIN_CODE_MIN:
+        return "Le code doit faire au moins %d caractères." % ADMIN_CODE_MIN
+    if not re.search(r"[A-Za-z]", code) or not re.search(r"[0-9]", code):
+        return "Le code doit contenir des lettres et des chiffres."
+    return None
+
+def verifier_code_admin(user, code):
+    """Vérifie le code admin PERSONNEL du compte (haché). Retourne True/False.
+    Si le compte n'a pas encore défini son code : seul ADMIN_CODE (amorçage) est accepté."""
+    h = (user or {}).get("admin_code_hash")
+    code = code or ""
+    if h:
+        try:
+            return bcrypt.checkpw(code.encode(), h.encode())
+        except Exception:
+            return False
+    return secrets.compare_digest(code, ADMIN_CODE)
+
 def a_permission(role, action):
     """Vérifie si un rôle admin a le droit d'exécuter une action donnée."""
     if not role:
@@ -2184,6 +2219,9 @@ def gerer_client(conn, addr):
     buf       = ""
     est_admin = False
     admin_role = None
+    admin_ok = False           # True seulement après admin_login réussi sur CETTE connexion
+    admin_provisoire = False   # True tant que le code personnel n'est pas défini
+    admin_derniere = 0.0       # dernière activité admin (expiration)
 
     with connexions_lock:
         global connexions_count
@@ -2226,6 +2264,45 @@ def gerer_client(conn, addr):
                     envoyer_srv(conn, {"ok":False,"msg":"Cet appareil est bloque."})
                     continue
                 fs_log_action_appareil(num_co, device_id, act, ip_client)
+                if act.startswith("admin_") and act != "admin_login":
+                    # ÉTAPE 1 : aucune action admin sans admin_login réussi sur cette connexion
+                    if not admin_ok:
+                        envoyer_srv(conn, {"ok": False, "admin_requis": True,
+                                           "msg": "Code admin requis : connecte-toi en administrateur."})
+                        continue
+                    # ÉTAPE 6 : expiration par inactivité
+                    if time.time() - admin_derniere > ADMIN_SESSION_SECONDES:
+                        admin_ok = False
+                        admin_provisoire = False
+                        admins_connectes.discard(num_co)
+                        fs_log_audit_complet(num_co, "admin_session_expiree", "inactivité", ip_client=ip_client)
+                        envoyer_srv(conn, {"ok": False, "admin_requis": True,
+                                           "msg": "Session admin expirée. Reconnecte-toi."})
+                        continue
+                    # ÉTAPE 2 : tant que le code personnel n'est pas défini, rien d'autre n'est permis
+                    if admin_provisoire and act != "admin_definir_code":
+                        envoyer_srv(conn, {"ok": False, "code_a_definir": True,
+                                           "msg": "Définis d'abord ton propre code admin."})
+                        continue
+                    admin_derniere = time.time()
+                    # ÉTAPE 5 : retaper le code pour les actions sensibles
+                    if act in ACTIONS_SENSIBLES and ADMIN_CONFIRMER_ACTIONS:
+                        if not (p.get("code_confirm") or ""):
+                            envoyer_srv(conn, {"ok": False, "code_requis": True,
+                                               "msg": "Retape ton code admin pour confirmer cette action."})
+                            continue
+                        _, _u_conf = fs_get_user_by_numero(num_co)
+                        cle_conf = f"admin_conf_{num_co}"
+                        if bloque(cle_conf):
+                            envoyer_srv(conn, {"ok": False, "msg": f"Trop d'erreurs. Réessaie dans {temps_restant(cle_conf)}s."})
+                            continue
+                        if not verifier_code_admin(_u_conf, p.get("code_confirm", "")):
+                            signaler_echec(cle_conf)
+                            fs_log_audit_complet(num_co, "admin_code_confirm_refuse", act, ip_client=ip_client)
+                            envoyer_srv(conn, {"ok": False, "code_requis": True,
+                                               "msg": "Code admin incorrect pour cette action."})
+                            continue
+                        signaler_succes(cle_conf)
                 if limite_depassee(f"act_ip:{ip_client}", GLOBAL_ACTIONS_PER_MIN, 60):
                     envoyer_srv(conn, {"ok":False,"msg":"Trop de requêtes. Réessaie plus tard."})
                     continue
@@ -2545,6 +2622,36 @@ def gerer_client(conn, addr):
                                 "cle_publique":trouve.get("cle_publique"),
                                 "verifie":bool(trouve.get("verifie")),
                                 "en_ligne":(trouve["numero"] in _en_ligne_parmi([trouve["numero"]])) if est_contact else False}})
+
+                elif act == "profil_contact":
+                    if not num_co:
+                        envoyer_srv(conn, {"ok": False, "msg": "Non connecte."})
+                    else:
+                        cible = str(p.get("numero") or "").strip()
+                        contacts = set(fs_mes_contacts(num_co))
+                        if not cible or (cible != num_co and cible not in contacts):
+                            envoyer_srv(conn, {"ok": False, "msg": "Profil non disponible."})
+                        else:
+                            uid_c, u_c = fs_get_user_by_numero(cible)
+                            if not uid_c:
+                                envoyer_srv(conn, {"ok": False, "msg": "Profil non disponible."})
+                            else:
+                                photo_b64 = u_c.get("photo_profil_base64")
+                                chemin_p = u_c.get("photo_profil_path")
+                                if not photo_b64 and chemin_p:
+                                    octets_p = _photo_lire(chemin_p)
+                                    if octets_p:
+                                        photo_b64 = base64.b64encode(octets_p).decode("ascii")
+                                envoyer_srv(conn, {"ok": True, "profil": {
+                                    "numero": cible,
+                                    "nom": u_c.get("nom", "?"),
+                                    "pseudo": u_c.get("pseudo", ""),
+                                    "bio": u_c.get("bio", ""),
+                                    "statut": u_c.get("statut", "disponible"),
+                                    "verifie": bool(u_c.get("verifie")),
+                                    "en_ligne": cible in _en_ligne_parmi([cible]),
+                                    "photo_base64": photo_b64,
+                                }})
 
                 # ─── PUBLIER CLE PUBLIQUE (chiffrement E2E) ──────────────
                 elif act == "publier_cle_publique":
@@ -3745,35 +3852,95 @@ def gerer_client(conn, addr):
                 elif act == "admin_login":
                     ip = addr[0]
                     cle_bf = f"admin_{ip}"
-                    if bloque(cle_bf):
-                        envoyer_srv(conn, {"ok": False, "msg": f"Trop de tentatives. Réessaie dans {temps_restant(cle_bf)}s."})
+                    cle_bf_c = f"admin_cpt_{num_co}"
+                    if bloque(cle_bf) or (num_co and bloque(cle_bf_c)):
+                        envoyer_srv(conn, {"ok": False, "msg": f"Trop de tentatives. Réessaie dans {max(temps_restant(cle_bf), temps_restant(cle_bf_c) if num_co else 0)}s."})
                         continue
                     if not ip_autorisee_pour_admin(ip):
                         signaler_echec(cle_bf)
+                        fs_log_audit_complet(num_co or "?", "admin_login_ip_refusee", ip, ip_client=ip)
                         envoyer_srv(conn, {"ok": False, "msg": "Origine IP non autorisée pour l’administration."})
                         continue
                     if not num_co:
                         signaler_echec(cle_bf)
                         envoyer_srv(conn, {"ok": False, "msg": "Authentifie-toi d’abord avec un compte."})
                         continue
-                    # Le compte doit déjà porter le flag est_admin dans Firestore
-                    # (à définir manuellement, jamais via l’interface publique)
                     _, user = fs_get_user_by_numero(num_co)
                     if not user or not user.get("est_admin"):
                         signaler_echec(cle_bf)
+                        fs_log_audit_complet(num_co, "admin_login_non_admin", "", ip_client=ip)
                         envoyer_srv(conn, {"ok": False, "msg": "Ce compte n’est pas autorisé à devenir administrateur."})
                         continue
-                    # Comparaison en temps constant
-                    if secrets.compare_digest(p.get("code", "") or "", ADMIN_CODE):
+                    # ÉTAPE 7 : 2FA obligatoire pour les administrateurs (si ADMIN_EXIGER_2FA=1)
+                    if ADMIN_EXIGER_2FA and not user.get("totp_actif"):
+                        envoyer_srv(conn, {"ok": False, "msg": "Active d'abord la double authentification (2FA) sur ce compte."})
+                        continue
+                    if verifier_code_admin(user, p.get("code", "") or ""):
                         signaler_succes(cle_bf)
+                        signaler_succes(cle_bf_c)
                         est_admin = True
                         admin_role = user.get("role") or "super_admin"
+                        admin_ok = True
+                        admin_derniere = time.time()
+                        admin_provisoire = not bool(user.get("admin_code_hash"))
                         with lock:
                             admins_connectes.add(num_co)
-                        envoyer_srv(conn, {"ok": True, "msg": "Accès admin accordé.", "role": admin_role})
+                        fs_log_audit_complet(num_co, "admin_login_ok", "provisoire" if admin_provisoire else "", ip_client=ip)
+                        _pm = PERMISSIONS_PAR_ROLE.get(admin_role)
+                        envoyer_srv(conn, {"ok": True, "msg": "Accès admin accordé.", "role": admin_role,
+                                           "permissions": "*" if _pm is None else sorted(_pm),
+                                           "code_a_definir": admin_provisoire})
                     else:
                         signaler_echec(cle_bf)
+                        signaler_echec(cle_bf_c)
+                        fs_log_audit_complet(num_co, "admin_login_echec", "", ip_client=ip)
                         envoyer_srv(conn, {"ok": False, "msg": "Code incorrect."})
+
+                elif act == "admin_definir_code":
+                    # ÉTAPES 2 et 3 : le code personnel se crée UNE seule fois
+                    uid_a, user_a = fs_get_user_by_numero(num_co)
+                    if not uid_a or not user_a or not user_a.get("est_admin"):
+                        envoyer_srv(conn, {"ok": False, "msg": "Compte non administrateur."})
+                    elif user_a.get("admin_code_hash"):
+                        envoyer_srv(conn, {"ok": False, "msg": "Le code est déjà défini. Utilise « Changer le code »."})
+                    else:
+                        nouveau = p.get("code", "") or ""
+                        err = code_admin_valide(nouveau)
+                        if err:
+                            envoyer_srv(conn, {"ok": False, "msg": err})
+                        elif secrets.compare_digest(nouveau, ADMIN_CODE):
+                            envoyer_srv(conn, {"ok": False, "msg": "Choisis un code différent du code d'amorçage."})
+                        else:
+                            fs_update_user(uid_a, {"admin_code_hash": hacher(nouveau), "admin_code_defini_le": horodatage()})
+                            admin_provisoire = False
+                            fs_log_audit_complet(num_co, "admin_code_defini", "", ip_client=addr[0])
+                            envoyer_srv(conn, {"ok": True, "msg": "Code admin enregistré. Il est maintenant personnel et modifiable."})
+
+                elif act == "admin_changer_code":
+                    uid_a, user_a = fs_get_user_by_numero(num_co)
+                    cle_ch = f"admin_chg_{num_co}"
+                    if not uid_a or not user_a or not user_a.get("est_admin"):
+                        envoyer_srv(conn, {"ok": False, "msg": "Compte non administrateur."})
+                    elif not user_a.get("admin_code_hash"):
+                        envoyer_srv(conn, {"ok": False, "msg": "Définis d'abord ton code admin."})
+                    elif bloque(cle_ch):
+                        envoyer_srv(conn, {"ok": False, "msg": f"Trop d'erreurs. Réessaie dans {temps_restant(cle_ch)}s."})
+                    elif not verifier_code_admin(user_a, p.get("ancien", "") or ""):
+                        signaler_echec(cle_ch)
+                        fs_log_audit_complet(num_co, "admin_code_changement_refuse", "", ip_client=addr[0])
+                        envoyer_srv(conn, {"ok": False, "msg": "Ancien code incorrect."})
+                    else:
+                        signaler_succes(cle_ch)
+                        nouveau = p.get("nouveau", "") or ""
+                        err = code_admin_valide(nouveau)
+                        if err:
+                            envoyer_srv(conn, {"ok": False, "msg": err})
+                        elif verifier_code_admin(user_a, nouveau):
+                            envoyer_srv(conn, {"ok": False, "msg": "Le nouveau code doit être différent de l'ancien."})
+                        else:
+                            fs_update_user(uid_a, {"admin_code_hash": hacher(nouveau), "admin_code_change_le": horodatage()})
+                            fs_log_audit_complet(num_co, "admin_code_change", "", ip_client=addr[0])
+                            envoyer_srv(conn, {"ok": True, "msg": "Code admin modifié."})
 
                 elif act == "admin_stats":
                     if not a_permission(admin_role, "admin_stats"): envoyer_srv(conn, {"ok":False,"msg":"Acces refuse."})
