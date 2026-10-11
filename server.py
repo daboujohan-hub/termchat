@@ -2653,6 +2653,29 @@ def gerer_client(conn, addr):
                                     "photo_base64": photo_b64,
                                 }})
 
+                elif act in ("admin_purger_compte", "admin_annuler_suppression"):
+                    if not a_permission(admin_role, act):
+                        envoyer_srv(conn, {"ok": False, "msg": "Acces refuse."})
+                    else:
+                        cible = str(p.get("numero") or "").strip()
+                        uid_c, u_c = fs_get_user_by_numero(cible) if cible else (None, None)
+                        if not uid_c:
+                            envoyer_srv(conn, {"ok": False, "msg": "Utilisateur introuvable."})
+                        elif act == "admin_annuler_suppression":
+                            if not u_c.get("suppression_demandee"):
+                                envoyer_srv(conn, {"ok": False, "msg": "Aucune demande de suppression pour ce compte."})
+                            else:
+                                fs_update_user(uid_c, {"desactive": False, "desactive_le": None,
+                                                       "suppression_demandee": False, "suppression_demandee_le": None})
+                                fs_log_audit_complet(num_co, "admin_annuler_suppression", cible, ip_client=addr[0])
+                                envoyer_srv(conn, {"ok": True, "msg": "Suppression annulee, compte reactive."})
+                        else:
+                            if not u_c.get("suppression_demandee") and p.get("force") is not True:
+                                envoyer_srv(conn, {"ok": False, "msg": "Aucune demande de suppression pour ce compte (force=true pour purger quand meme)."})
+                            else:
+                                fs_log_audit_complet(num_co, "admin_purger_compte", cible, ip_client=addr[0])
+                                envoyer_srv(conn, purger_compte(cible))
+
                 # ─── PUBLIER CLE PUBLIQUE (chiffrement E2E) ──────────────
                 elif act == "publier_cle_publique":
                     if not num_co:
@@ -3186,8 +3209,12 @@ def gerer_client(conn, addr):
                                 envoyer_srv(conn, {"ok":False,"msg":"Mot de passe incorrect."})
                             else:
                                 fs_log_audit_complet(num_co, "suppression_compte", "Compte désactivé par l'utilisateur", ip_client=addr[0])
-                                fs_update_user(uid, {"desactive": True, "desactive_le": horodatage(), "premium": False, "premium_expire": None, "pin": None})
-                                envoyer_srv(conn, {"ok":True,"msg":"Compte désactivé."})
+                                fs_update_user(uid, {"desactive": True, "desactive_le": horodatage(), "suppression_demandee": True, "suppression_demandee_le": horodatage(), "premium": False, "premium_expire": None, "pin": None})
+                                if ACCOUNT_DELETION_GRACE_DAYS <= 0:
+                                    purger_compte(num_co)
+                                    envoyer_srv(conn, {"ok":True,"msg":"Compte supprime definitivement."})
+                                else:
+                                    envoyer_srv(conn, {"ok":True,"msg":f"Compte desactive. Tes donnees seront effacees definitivement dans {ACCOUNT_DELETION_GRACE_DAYS} jours. Pour annuler, contacte l'assistance avant cette date."})
                                 num_co = None
 
                 # ─── PIN ──────────────────────────────────
@@ -4727,6 +4754,115 @@ def edumap_photo_action(p, ip):
         print(f"⚠️  Erreur edumap_photo: {ex}")
         return {"ok": False, "msg": "Erreur serveur."}
 
+# ── Suppression définitive des comptes (Google Play / RGPD) ────────────────────────────────────────────
+ACCOUNT_DELETION_GRACE_DAYS = int(os.environ.get("ACCOUNT_DELETION_GRACE_DAYS", "30"))
+PURGE_INTERVALLE = int(os.environ.get("PURGE_INTERVALLE_SECONDES", "21600"))  # 6 h
+
+def _supprimer_docs(ref_collection, lot=200):
+    """Supprime tous les documents d'une collection ou sous-collection, par lots."""
+    total = 0
+    for _ in range(1000):
+        docs = list(ref_collection.limit(lot).stream())
+        if not docs:
+            break
+        for d in docs:
+            try:
+                d.reference.delete()
+                total += 1
+            except Exception:
+                pass
+        if len(docs) < lot:
+            break
+    return total
+
+def purger_compte(numero):
+    """Efface définitivement les données personnelles d'un compte. Opérations répétables : en cas d'erreur, on peut relancer."""
+    if not db:
+        return {"ok": False, "msg": "Base de donnees indisponible."}
+    try:
+        uid, user = fs_get_user_by_numero(numero)
+        if not uid or not user:
+            return {"ok": False, "msg": "Compte introuvable."}
+        resume = {}
+        # 1) conversations privées : messages des deux côtés, puis la conversation
+        n = 0
+        for conv in list(db.collection("historique").where(filter=FieldFilter("participants", "array_contains", numero)).stream()):
+            _supprimer_docs(db.collection("historique").document(conv.id).collection("messages"))
+            conv.reference.delete()
+            n += 1
+        resume["conversations"] = n
+        # 2) photo de profil
+        chemin_photo = user.get("photo_profil_path")
+        if chemin_photo:
+            _photo_retirer(chemin_photo)
+        # 3) jetons de notification
+        resume["jetons_push"] = 0
+        for d in list(db.collection("push_tokens").where(filter=FieldFilter("numero", "==", numero)).stream()):
+            d.reference.delete()
+            resume["jetons_push"] += 1
+        # 4) favoris et retours envoyés
+        for coll in ("favoris", "feedback"):
+            for d in list(db.collection(coll).where(filter=FieldFilter("numero", "==", numero)).stream()):
+                d.reference.delete()
+        # 5) écrits de l'utilisateur, avec leurs commentaires et favoris
+        for e in list(db.collection("ecritures").where(filter=FieldFilter("auteur", "==", numero)).stream()):
+            _supprimer_docs(e.reference.collection("commentaires"))
+            for f in list(db.collection("favoris").where(filter=FieldFilter("ecriture_id", "==", e.id)).stream()):
+                f.reference.delete()
+            e.reference.delete()
+        # 6) groupes : on retire l'utilisateur ; un groupe vide est supprimé
+        for gid, g in fs_mes_groupes(numero):
+            membres = [m for m in (g.get("membres") or []) if m != numero]
+            if not membres:
+                db.collection("groupes").document(gid).delete()
+            else:
+                maj = {"membres": membres}
+                if g.get("createur") == numero:
+                    maj["createur"] = membres[0]
+                fs_save_groupe(gid, maj)
+        # 7) propositions d'écoles : en attente -> supprimées ; publiées -> anonymisées
+        for d in list(db.collection("ecoles_edumap").where(filter=FieldFilter("propose_par", "==", numero)).stream()):
+            e = d.to_dict() or {}
+            if (e.get("statut") or "publiee") == "en_attente":
+                _edumap_retirer_photos(d.id, e)
+                d.reference.delete()
+            else:
+                d.reference.update({"propose_par": None})
+        # 8) le compte lui-même (en dernier : si une étape échoue, la purge pourra être relancée)
+        fs_delete_user(uid)
+        fs_log_audit_complet(numero, "compte_purge", "Donnees personnelles effacees definitivement")
+        return {"ok": True, "msg": "Compte efface definitivement.", "details": resume}
+    except Exception as ex:
+        print(f"⚠️  purger_compte({numero}) a échoué: {ex}")
+        return {"ok": False, "msg": f"Erreur: {ex}"}
+
+def _purger_comptes_a_echeance():
+    """Efface les comptes dont le délai de grâce est écoulé. Retourne la liste des comptes traités."""
+    if not (db and ALLOW_ACCOUNT_DELETION):
+        return []
+    limite = datetime.datetime.now() - datetime.timedelta(days=max(0, ACCOUNT_DELETION_GRACE_DAYS))
+    traites = []
+    for d in list(db.collection("users").where(filter=FieldFilter("suppression_demandee", "==", True)).stream()):
+        u = d.to_dict() or {}
+        try:
+            quand = datetime.datetime.fromisoformat(str(u.get("suppression_demandee_le")))
+        except Exception:
+            continue
+        if quand <= limite and u.get("numero"):
+            r = purger_compte(u["numero"])
+            traites.append((u["numero"], r.get("ok")))
+    return traites
+
+def _boucle_purge_comptes():
+    time.sleep(120)  # laisse le serveur démarrer
+    while True:
+        try:
+            for numero, ok in _purger_comptes_a_echeance():
+                print(f"🗑️  Purge du compte {numero}: {'ok' if ok else 'échec (nouvel essai au prochain passage)'}")
+        except Exception as e:
+            print(f"⚠️  Boucle de purge: {e}")
+        time.sleep(PURGE_INTERVALLE)
+
 def gerer_client_tls(conn, addr, ctx):
     """
     Handshake TLS dans le thread du client.
@@ -4874,6 +5010,7 @@ def main():
         sys.exit(1)
 
     threading.Thread(target=_boucle_nettoyage, daemon=True).start()
+    threading.Thread(target=_boucle_purge_comptes, daemon=True).start()
     _redis_demarrer()
     if STATS_INTERVALLE > 0:
         threading.Thread(target=_boucle_stats, daemon=True).start()
