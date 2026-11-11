@@ -1412,6 +1412,11 @@ MAX_CONNEXIONS_SIMULTANEES = int(os.environ.get("MAX_CONNEXIONS", "500"))  # au-
 connexions_count = 0
 connexions_lock = threading.Lock()
 MAX_TAILLE_BUFFER = MAX_BUFFER_BYTES
+TIMEOUT_AVANT_LOGIN = int(os.environ.get("TIMEOUT_AVANT_LOGIN", "600"))
+MAX_BUFFER_AVANT_LOGIN = int(os.environ.get("MAX_BUFFER_AVANT_LOGIN", str(1024 * 1024)))
+MAX_CNX_PAR_IP = int(os.environ.get("MAX_CNX_PAR_IP", "20"))  # 0 = désactivé
+LOG_REQUETES = os.environ.get("LOG_REQUETES", "0") == "1"
+_cnx_par_ip = {}
 
 # ── Anti-bruteforce (persistant via Firestore) ───────────────
 tentatives_echec = {}   # cache local: cle -> [nb_echecs, timestamp_dernier_echec]
@@ -2223,19 +2228,27 @@ def gerer_client(conn, addr):
     admin_provisoire = False   # True tant que le code personnel n'est pas défini
     admin_derniere = 0.0       # dernière activité admin (expiration)
 
+    ip_cnx = addr[0]
     with connexions_lock:
-        global connexions_count
-        connexions_count += 1
+        _n_ip = _cnx_par_ip.get(ip_cnx, 0)
+        refuse_ip = bool(MAX_CNX_PAR_IP) and _n_ip >= MAX_CNX_PAR_IP and ip_cnx not in ("127.0.0.1", "::1")
+        if not refuse_ip:
+            _cnx_par_ip[ip_cnx] = _n_ip + 1
+    if refuse_ip:
+        print(f"⛔ Trop de connexions simultanées depuis {ip_cnx} : refusée")
+        try: conn.close()
+        except Exception: pass
+        return
 
     try:
         while True:
-            conn.settimeout(TIMEOUT)
+            conn.settimeout(TIMEOUT if num_co else TIMEOUT_AVANT_LOGIN)
             try: chunk = conn.recv(8192).decode("utf-8", errors="replace")
             except socket.timeout:
                 if num_co: envoyer_srv(conn, {"type":"timeout","msg":"Deconnecte pour inactivite."})
                 break
             if not chunk: break
-            if len(buf) + len(chunk) > MAX_TAILLE_BUFFER:
+            if len(buf) + len(chunk) > (MAX_TAILLE_BUFFER if num_co else MAX_BUFFER_AVANT_LOGIN):
                 try: envoyer_srv(conn, {"ok":False,"msg":"Message trop volumineux."})
                 except Exception: pass
                 break
@@ -2256,7 +2269,12 @@ def gerer_client(conn, addr):
                     continue
                 act = p.get("action", "")
                 device_id = p.get("device_id", "")
-                print(f"REQUETE RECUE: action={act} depuis {addr[0]}")
+                if any(p.get(k) is not None and not isinstance(p.get(k), str)
+                       for k in ("action", "device_id", "numero", "mdp", "email", "pseudo")):
+                    envoyer_srv(conn, {"ok":False,"msg":"Requête invalide."})
+                    continue
+                if LOG_REQUETES:
+                    print(f"REQUETE RECUE: action={act} depuis {addr[0]}")
                 if not act:
                     envoyer_srv(conn, {"ok":False,"msg":"Requête invalide."})
                     continue
@@ -2632,7 +2650,7 @@ def gerer_client(conn, addr):
                         if not cible or (cible != num_co and cible not in contacts):
                             envoyer_srv(conn, {"ok": False, "msg": "Profil non disponible."})
                         else:
-                            uid_c, u_c = fs_get_user_by_numero(cible)
+                            uid_c, u_c = _fs_get_user_by_numero_direct(cible)
                             if not uid_c:
                                 envoyer_srv(conn, {"ok": False, "msg": "Profil non disponible."})
                             else:
@@ -2909,6 +2927,8 @@ def gerer_client(conn, addr):
                                 envoyer_srv(conn, {"ok":False,"msg":"Destinataire introuvable."})
                             elif num_co in dest_user.get("bloque",[]):
                                 envoyer_srv(conn, {"ok":False,"msg":"Tu es bloque par cet utilisateur."})
+                            elif dest in (exp_user or {}).get("bloque", []):
+                                envoyer_srv(conn, {"ok":False,"msg":"Tu as bloqué cet utilisateur. Débloque-le pour lui écrire."})
                             elif nouveau_contact and not deja_premium and fs_compter_contacts_distincts(num_co) >= 5:
                                 envoyer_srv(conn, {"ok":False,"msg":"Limite de 5 contacts atteinte en gratuit. Passe premium pour debloquer."})
                             else:
@@ -3272,6 +3292,10 @@ def gerer_client(conn, addr):
                             envoyer_srv(conn, {"ok":False,"msg":"Envoi de fichiers réservé au premium."})
                         elif not dest_user:
                             envoyer_srv(conn, {"ok":False,"msg":"Destinataire introuvable."})
+                        elif num_co in dest_user.get("bloque", []):
+                            envoyer_srv(conn, {"ok":False,"msg":"Tu es bloqué par cet utilisateur."})
+                        elif dest in (exp_user or {}).get("bloque", []):
+                            envoyer_srv(conn, {"ok":False,"msg":"Tu as bloqué cet utilisateur. Débloque-le pour lui écrire."})
                         else:
                             try:
                                 verifier_budget_stockage()
@@ -3316,6 +3340,10 @@ def gerer_client(conn, addr):
                             envoyer_srv(conn, {"ok":False,"msg":"Envoi inline de vocaux désactivé en production Internet."})
                         elif not dest_user:
                             envoyer_srv(conn, {"ok":False,"msg":"Destinataire introuvable."})
+                        elif num_co in dest_user.get("bloque", []):
+                            envoyer_srv(conn, {"ok":False,"msg":"Tu es bloqué par cet utilisateur."})
+                        elif dest in (exp_user or {}).get("bloque", []):
+                            envoyer_srv(conn, {"ok":False,"msg":"Tu as bloqué cet utilisateur. Débloque-le pour lui écrire."})
                         else:
                             try:
                                 verifier_budget_stockage()
@@ -4434,7 +4462,11 @@ def gerer_client(conn, addr):
         try: conn.close()
         except Exception: pass
         with connexions_lock:
-            connexions_count -= 1
+            _r = _cnx_par_ip.get(ip_cnx, 1) - 1
+            if _r <= 0:
+                _cnx_par_ip.pop(ip_cnx, None)
+            else:
+                _cnx_par_ip[ip_cnx] = _r
 
 # ══════════════════════════════════════════════════════════
 #  DÉMARRAGE
@@ -4863,6 +4895,14 @@ def _boucle_purge_comptes():
             print(f"⚠️  Boucle de purge: {e}")
         time.sleep(PURGE_INTERVALLE)
 
+def _cycle_client(conn, addr, ctx):
+    global connexions_count
+    try:
+        gerer_client_tls(conn, addr, ctx)
+    finally:
+        with connexions_lock:
+            connexions_count -= 1
+
 def gerer_client_tls(conn, addr, ctx):
     """
     Handshake TLS dans le thread du client.
@@ -5020,18 +5060,14 @@ def main():
         try:
             conn, addr = srv.accept()
             with connexions_lock:
-                nb_actifs = connexions_count
-            if nb_actifs >= MAX_CONNEXIONS_SIMULTANEES:
+                refuse = (connexions_count >= MAX_CONNEXIONS_SIMULTANEES) or (not ctx)
+                if not refuse:
+                    connexions_count += 1
+            if refuse:
                 try: conn.close()
                 except Exception: pass
                 continue
-            if ctx:
-                threading.Thread(target=gerer_client_tls, args=(conn, addr, ctx), daemon=True).start()
-            else:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+            threading.Thread(target=_cycle_client, args=(conn, addr, ctx), daemon=True).start()
         except Exception as e:
             print(f"⚠️  Erreur boucle accept (ignoree, on continue): {e}")
             continue

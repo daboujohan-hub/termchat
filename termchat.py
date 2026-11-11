@@ -83,7 +83,18 @@ def verifier_confiance_tls(host, port, empreinte):
     except Exception:
         pins = {}
 
+    attendue = os.environ.get("TERMCHAT_EMPREINTE", "").strip().lower().replace(":", "")
     if cle not in pins:
+        if attendue:
+            if attendue != str(empreinte).lower():
+                print(f"{R}❌ Empreinte du serveur différente de TERMCHAT_EMPREINTE : refusé.{Z}")
+                return False
+        else:
+            print(f"{J}🔐 Première connexion à {cle}.{Z}")
+            print(f"   Empreinte du serveur : {empreinte}")
+            rep_ = input("   Compare-la avec celle d'Aboudev Labs. Faire confiance ? (oui/non) : ").strip().lower()
+            if rep_ not in ("oui", "o", "yes", "y"):
+                return False
         pins[cle] = empreinte
         with open(TLS_PIN_FILE, "w", encoding="utf-8") as f:
             json.dump(pins, f, indent=2)
@@ -1782,7 +1793,7 @@ def menu_edumap():
                             for idx, photo_b64 in enumerate(photos, 1):
                                 try:
                                     data = base64.b64decode(photo_b64)
-                                    nom_fichier = ec.get("nom", "ecole").replace(" ", "_")
+                                    nom_fichier = _sanitizer_nom_fichier(str(ec.get("nom", "ecole")).replace(" ", "_"))
                                     chemin = os.path.join(dossier, f"{nom_fichier}_{idx}.jpg")
                                     with open(chemin, "wb") as f:
                                         f.write(data)
@@ -2536,7 +2547,13 @@ def main():
         sock_cli.settimeout(10)
         sock_cli.connect((host, port))
 
-        USE_TLS = os.environ.get("REQUIRE_TLS", "1") != "0"
+        USE_TLS = True
+        if os.environ.get("REQUIRE_TLS", "1") == "0":
+            if os.environ.get("TERMCHAT_ALLOW_PLAINTEXT") == "1":
+                USE_TLS = False
+            else:
+                erreur("TLS désactivé refusé. (test local seulement : TERMCHAT_ALLOW_PLAINTEXT=1)")
+                sys.exit(1)
 
         if USE_TLS:
             # TLS avec pinning TOFU + minimum TLS 1.2
